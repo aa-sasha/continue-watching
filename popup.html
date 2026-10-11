@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Продолжить просмотр</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1 class="logo"><span class="logo-icon" id="logoIcon"></span> Продолжить просмотр</h1>
+    </header>
+
+    <!-- сборка для магазина: отслеживаются только сайты, добавленные здесь -->
+    <section class="site-bar hidden" id="siteBar" aria-live="polite">
+      <div class="site-info">
+        <div class="site-eyebrow" id="siteState"></div>
+        <div class="site-host" id="siteHost"></div>
+      </div>
+      <button class="btn-site" id="btnSite"></button>
+    </section>
+
+    <div id="emptyState" class="empty-state hidden">
+      <div class="empty-icon" id="emptyIcon"></div>
+      <p>Пока ничего не смотрели</p>
+      <p class="empty-sub" id="emptySub">Откройте сайт с видео, нажмите<br>«Отслеживать этот сайт» и включите серию</p>
+    </div>
+
+    <div id="errorState" class="empty-state hidden" role="alert">
+      <p>Не удалось загрузить историю</p>
+      <p class="empty-sub">Перезагрузите расширение в chrome://extensions<br>и откройте окно снова</p>
+    </div>
+
+    <ul class="watch-list" id="watchList"></ul>
+    <!-- очистка всей истории — внизу и словами: крестик в шапке читался как «закрыть окно» -->
+    <footer class="footer hidden" id="footer">
+      <button class="btn-clear-text" id="btnClear"></button>
+    </footer>
+  </div>
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+  <script src="build.js"></script>
+  <script src="icons.js"></script>
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

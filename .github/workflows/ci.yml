@@ -1,0 +1,16 @@
+# Тесты и обе сборки на каждый PR и пуш в main: сборка store падает, если в неё попал код личной.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - run: node scripts/build.mjs

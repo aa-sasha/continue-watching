@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Политика конфиденциальности расширения Chrome «Продолжить просмотр — трекер серий»">
+<title>Политика «Продолжить просмотр»</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;800&display=swap">
+<style>
+  /* Лист документа в тонах расширения (r6tv bento): ячейка на фоне страницы, одна колонка для чтения */
+  :root {
+    --bg: #f3f4f6; --cell: #ffffff; --fg: #14171d; --muted: #5b616d; --line: #e3e5e9; --mark: #2f9e63;
+    --font: Roboto, -apple-system, 'Segoe UI', Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0a0c10; --cell: #14171d; --fg: #f1f3f6; --muted: #9aa0ab; --line: #262b35; --mark: #55c989; color-scheme: dark; }
+  }
+  :root[data-theme="dark"] { --bg: #0a0c10; --cell: #14171d; --fg: #f1f3f6; --muted: #9aa0ab; --line: #262b35; --mark: #55c989; color-scheme: dark; }
+  html { color-scheme: light; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/1.65 var(--font); padding-inline: 16px; padding-block: 40px 56px; }
+  main { max-width: 680px; margin: 0 auto; display: grid; gap: 12px; }
+  .cell { background: var(--cell); border-radius: 14px; padding: 24px 28px; min-width: 0; }
+  .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 30px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; margin: 8px 0 8px; text-wrap: balance; }
+  h2 { font-size: 18px; font-weight: 700; margin: 0 0 8px; }
+  p, ul { margin: 0; } p + p, p + ul, ul + p { margin-top: 8px; }
+  ul { padding-left: 20px; } li + li { margin-top: 4px; }
+  .lead { font-size: 18px; }
+  .lead strong { color: var(--mark); font-weight: 700; }
+  code { font: 500 14px/1 ui-monospace, Consolas, monospace; background: var(--line); padding: 2px 6px; border-radius: 6px; }
+  .date { color: var(--muted); font-size: 14px; }
+  @media (max-width: 480px) { .cell { padding: 20px; } h1 { font-size: 24px; } }
+</style>
+
+</head>
+<body>
+<main>
+  <section class="cell">
+    <div class="eyebrow">Расширение Chrome · трекер серий</div>
+    <h1>Политика конфиденциальности «Продолжить просмотр»</h1>
+    <p class="date">Действует с 11 октября 2026 года</p>
+  </section>
+
+  <section class="cell">
+    <p class="lead">История просмотра хранится <strong>только на вашем устройстве</strong> и никуда не отправляется. У расширения нет серверов, аналитики и рекламы, данные не передаются третьим лицам.</p>
+  </section>
+
+  <section class="cell">
+    <h2>Какие данные хранятся</h2>
+    <p>Только на сайтах, которые вы сами добавили кнопкой «Отслеживать этот сайт», и только после того, как видео на странице действительно воспроизводилось:</p>
+    <ul>
+      <li>адрес и заголовок страницы, адрес её обложки из метаданных страницы;</li>
+      <li>номер сезона и серии, момент остановки, длительность видео, отметки о досмотренных сериях;</li>
+      <li>время последнего просмотра;</li>
+      <li>список сайтов, которые вы добавили.</li>
+    </ul>
+  </section>
+
+  <section class="cell">
+    <h2>Где хранятся</h2>
+    <p>В локальном хранилище браузера (<code>chrome.storage.local</code>) на вашем устройстве. Данные не синхронизируются между устройствами и не передаются ни разработчику, ни третьим лицам.</p>
+    <p>Единственный сетевой запрос — загрузка обложки сериала в окне расширения. Обложка загружается с того же сайта, где вы смотрели; данные расширения при этом не отправляются.</p>
+  </section>
+
+  <section class="cell">
+    <h2>Доступ к сайтам</h2>
+    <p>По умолчанию у расширения нет доступа ни к одному сайту. Доступ к сайту и к окну его видеоплеера, если оно встроено с другого домена, запрашивает Chrome, когда вы нажимаете «Отслеживать этот сайт». На этих сайтах расширение только читает номер серии и текущее время видео и ничего не меняет на странице.</p>
+    <p>Кнопка «Не отслеживать» возвращает доступ Chrome. Отозвать доступ можно и в настройках расширения в Chrome.</p>
+  </section>
+
+  <section class="cell">
+    <h2>Как удалить данные</h2>
+    <ul>
+      <li>Одна запись — крестик рядом с ней в окне расширения.</li>
+      <li>Вся история — кнопка «Очистить историю».</li>
+      <li>Всё сразу — удаление расширения из Chrome.</li>
+    </ul>
+  </section>
+
+  <section class="cell">
+    <h2>Изменения и связь</h2>
+    <p>Если политика изменится, новая версия появится по этому же адресу с новой датой. Вопросы — через вкладку «Поддержка» на странице расширения в Chrome Web Store.</p>
+  </section>
+</main>
+</body>
+</html>

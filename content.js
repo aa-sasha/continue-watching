@@ -494,6 +494,7 @@
     log('progress', { ...state });
     send({
       type: 'progress',
+      force: !!force, // пауза, смена серии, досмотр — сразу в синхронизацию
       season: state.season,
       episode: state.episode,
       translation: readTranslation(),

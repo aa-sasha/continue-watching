@@ -150,6 +150,7 @@
     state.lastSent = now;
     send({
       type: 'progress',
+      force: !!force, // пауза, смена серии, досмотр — сразу в синхронизацию
       season: state.season,
       episode,
       time: Math.floor(state.time),

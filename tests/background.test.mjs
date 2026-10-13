@@ -9,33 +9,59 @@ import { execFileSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 
+// Облако chrome.storage.sync: одно на несколько «компьютеров» (boot с общим cloud). Изменение
+// доходит до всех подписчиков onChanged, как в Chrome. quota — лимит байт на всё (QUOTA_BYTES).
+function makeCloud({ quota = Infinity } = {}) {
+  return { data: {}, listeners: new Set(), quota, writes: 0 };
+}
+
 // dir — откуда брать background.js и shared.js: исходники или готовая сборка (dist/store)
-function boot({ build = 'personal', granted = () => true, dir = '..' } = {}) {
+function boot({ build = 'personal', granted = () => true, dir = '..', cloud = makeCloud() } = {}) {
   const shared = require(`${dir}/shared.js`);
   const src = fs.readFileSync(new URL(`${dir}/background.js`, import.meta.url), 'utf8');
-  const store = { local: {}, session: {}, sync: {} };
+  const store = { local: {}, session: {}, sync: cloud.data };
   const delay = () => new Promise((r) => setTimeout(r, Math.random() * 15));
+  const size = (o) => JSON.stringify(o).length;
   const area = (n) => ({
     async get(k) {
       await delay();
       const o = {};
-      for (const key of [].concat(k)) if (key in store[n]) o[key] = structuredClone(store[n][key]);
+      const keys = k === null ? Object.keys(store[n]) : [].concat(k);
+      for (const key of keys) if (key in store[n]) o[key] = structuredClone(store[n][key]);
       return o;
     },
     async set(o) {
       await delay();
+      if (n === 'sync') {
+        if (size({ ...store.sync, ...o }) > cloud.quota) throw new Error('QUOTA_BYTES quota exceeded');
+        cloud.writes++;
+      }
+      const changes = {};
+      for (const [k, v] of Object.entries(o)) changes[k] = { oldValue: store[n][k], newValue: structuredClone(v) };
       Object.assign(store[n], structuredClone(o));
+      if (n === 'sync') for (const f of cloud.listeners) setTimeout(() => f(structuredClone(changes), 'sync'));
     },
     async remove(k) {
-      for (const key of [].concat(k)) delete store[n][key];
+      const changes = {};
+      for (const key of [].concat(k)) {
+        if (key in store[n]) changes[key] = { oldValue: store[n][key] };
+        delete store[n][key];
+      }
+      if (n === 'sync') for (const f of cloud.listeners) setTimeout(() => f(changes, 'sync'));
     },
   });
+  const onInstalled = [];
   let handler;
   const registered = { scripts: [], injected: [], removed: [] };
   const chrome = {
-    storage: { local: area('local'), session: area('session'), sync: area('sync') },
+    storage: {
+      local: area('local'),
+      session: area('session'),
+      sync: area('sync'),
+      onChanged: { addListener: (f) => cloud.listeners.add(f) },
+    },
     runtime: {
-      onInstalled: { addListener() {} },
+      onInstalled: { addListener: (f) => onInstalled.push(f) },
       onStartup: { addListener() {} },
       onMessage: { addListener: (f) => (handler = f) },
     },
@@ -58,8 +84,16 @@ function boot({ build = 'personal', granted = () => true, dir = '..' } = {}) {
   new Function('chrome', 'importScripts', 'AT_BUILD', ...names, src)(chrome, () => {}, build, ...names.map((n) => shared[n]));
   // sender.tab.url — адрес верхней страницы вкладки (Chrome отдаёт его при host_permissions)
   const call = (msg, tabId = 0, url) => new Promise((r) => handler(msg, { tab: { id: tabId, url } }, r));
-  return { call, store, registered };
+  // «установка расширения» на этом компьютере: обработчики onInstalled (сверка с sync и т. п.)
+  const install = async () => {
+    for (const f of onInstalled) await f();
+    await idle();
+  };
+  return { call, store, registered, install };
 }
+
+// дождаться, пока события sync разойдутся и очередь фона их обработает
+const idle = () => new Promise((r) => setTimeout(r, 150));
 
 const meta = (t) => ({ site: 'newdeaf', url: `https://a.newdeaf.co/anime/${t}.html`, title: t, total: 12 });
 
@@ -241,4 +275,102 @@ test('готовая сборка для магазина работает бе�
   await call({ type: 'manual', key: 'video.example.org:/series/5', patch: { episode: 5 } });
   assert.equal((await call({ type: 'list' })).list[0].episode, 5);
   assert.equal(registered.scripts[0].js.includes('tracker.js'), true);
+});
+
+// ── синхронизация между компьютерами одного профиля Chrome ──
+
+const blich = (n) => ({ site: 'newdeaf', url: `https://a.newdeaf.co/anime/${n}.html`, title: n, total: 366 });
+
+test('sync: досмотренное на одном компьютере появляется на другом', async () => {
+  const cloud = makeCloud();
+  const a = boot({ cloud });
+  const b = boot({ cloud });
+  await a.call({ type: 'page', meta: blich('S1') }, 1);
+  await a.call({ type: 'progress', season: 1, episode: 9, time: 1300, duration: 1384, force: true }, 1);
+  await idle();
+  const [e] = (await b.call({ type: 'list' })).list;
+  assert.equal(e?.title, 'S1');
+  assert.equal(e.episode, 9);
+  assert.equal(e.watched['1:9'], true);
+});
+
+test('sync: время во время просмотра — не чаще раза в минуту, пауза и смена серии — сразу', async () => {
+  const cloud = makeCloud();
+  const a = boot({ cloud });
+  await a.call({ type: 'page', meta: blich('S2') }, 1);
+  await a.call({ type: 'progress', season: 1, episode: 1, time: 10, duration: 1384 }, 1);
+  const first = cloud.writes;
+  for (let t = 20; t <= 60; t += 10) await a.call({ type: 'progress', season: 1, episode: 1, time: t, duration: 1384 }, 1);
+  assert.equal(cloud.writes, first); // опрос каждые 10 с в sync не идёт (лимит 120 записей в минуту)
+  await a.call({ type: 'progress', season: 1, episode: 1, time: 65, duration: 1384, force: true }, 1);
+  assert.equal(cloud.writes, first + 1); // пауза — сразу
+  await a.call({ type: 'progress', season: 1, episode: 2, time: 5, duration: 1384 }, 1);
+  assert.equal(cloud.writes, first + 2); // новая серия — сразу, даже без force
+});
+
+test('sync: побеждает более свежая запись, а не последняя пришедшая', async () => {
+  const cloud = makeCloud();
+  const a = boot({ cloud });
+  const b = boot({ cloud });
+  await a.call({ type: 'page', meta: blich('S3') }, 1);
+  await a.call({ type: 'progress', season: 1, episode: 5, time: 100, duration: 1384, force: true }, 1);
+  await idle();
+  await b.call({ type: 'page', meta: blich('S3') }, 1);
+  await b.call({ type: 'progress', season: 1, episode: 6, time: 200, duration: 1384, force: true }, 1);
+  await idle();
+  assert.equal((await a.call({ type: 'list' })).list[0].episode, 6);
+  // запоздавшая старая запись с первого компьютера не откатывает второй
+  const stale = { ...cloud.data['e:newdeaf:/anime/S3.html'], e: 4, up: 1 };
+  for (const f of cloud.listeners) f({ 'e:newdeaf:/anime/S3.html': { newValue: stale } }, 'sync');
+  await idle();
+  assert.equal((await b.call({ type: 'list' })).list[0].episode, 6);
+});
+
+test('sync: удаление расходится, «Вернуть» отменяет его на обоих', async () => {
+  const cloud = makeCloud();
+  const a = boot({ cloud });
+  const b = boot({ cloud });
+  await a.call({ type: 'page', meta: blich('S4') }, 1);
+  await a.call({ type: 'progress', season: 1, episode: 3, time: 100, duration: 1384, force: true }, 1);
+  await idle();
+  const entry = (await b.call({ type: 'list' })).list[0];
+  await a.call({ type: 'remove', key: entry.key });
+  await idle();
+  assert.equal((await b.call({ type: 'list' })).list.length, 0);
+  await a.call({ type: 'restore', entry });
+  await idle();
+  assert.equal((await b.call({ type: 'list' })).list[0]?.episode, 3);
+});
+
+test('sync: при нехватке места вытесняется самая старая запись, но у других компьютеров она остаётся', async () => {
+  const cloud = makeCloud({ quota: 650 }) // три записи по ~200 байт;
+  const a = boot({ cloud });
+  const b = boot({ cloud });
+  for (const n of ['Q1', 'Q2', 'Q3', 'Q4']) {
+    await a.call({ type: 'page', meta: blich(n) }, 1);
+    await a.call({ type: 'progress', season: 1, episode: 2, time: 50, duration: 1384, force: true }, 1);
+    await idle();
+  }
+  const synced = Object.keys(cloud.data).filter((k) => k.startsWith('e:'));
+  assert.ok(synced.includes('e:newdeaf:/anime/Q4.html')); // свежая влезла
+  assert.ok(!synced.includes('e:newdeaf:/anime/Q1.html')); // старая вытеснена из sync
+  const titles = (await b.call({ type: 'list' })).list.map((e) => e.title);
+  assert.ok(titles.includes('Q1')); // но второй компьютер её не потерял
+});
+
+test('sync: новая установка забирает историю из sync и отдаёт свою', async () => {
+  const cloud = makeCloud();
+  const a = boot({ cloud });
+  await a.call({ type: 'page', meta: blich('R1') }, 1);
+  await a.call({ type: 'progress', season: 1, episode: 7, time: 100, duration: 1384, force: true }, 1);
+  const b = boot({ cloud });
+  b.store.local.history = {
+    'newdeaf:/anime/R2.html': {
+      key: 'newdeaf:/anime/R2.html', site: 'newdeaf', url: 'https://a.newdeaf.co/anime/R2.html', title: 'R2',
+      season: 1, episode: 2, time: 30, duration: 1384, watched: {}, updatedAt: Date.now(),
+    },
+  };
+  await b.install();
+  assert.deepEqual((await b.call({ type: 'list' })).list.map((e) => e.title).sort(), ['R1', 'R2']);
+  assert.ok(cloud.data['e:newdeaf:/anime/R2.html']); // своё отдала
 });

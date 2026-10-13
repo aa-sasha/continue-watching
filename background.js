@@ -151,6 +151,109 @@ chrome.runtime.onInstalled.addListener(async () => {
 let queue = Promise.resolve();
 const serial = (fn) => (queue = queue.then(fn, fn));
 
+// ── синхронизация между компьютерами одного профиля Chrome (chrome.storage.sync) ──
+// Главная история — локальная (пишется раз в ~10 с). В sync уходит сжатая суть каждой записи
+// (`e:<ключ>`, shared.js atPackEntry). Лимиты sync — ~100 КБ всего, 8 КБ на запись, 120 записей
+// в минуту, — поэтому пишем только смену серии/паузу/досмотр (force) и не чаще раза в минуту
+// во время просмотра. Конфликт двух компьютеров решает свежесть (updatedAt).
+// Удаление — отдельным списком `deleted` {ключ: когда}: просто пропавшая из sync запись могла быть
+// вытеснена по лимиту, и стирать её у другого компьютера нельзя.
+const SYNC_PREFIX = 'e:';
+const SYNC_EVERY = 60000;
+const TOMBSTONES_MAX = 200;
+const lastPush = new Map(); // ключ → { at, mark }
+
+const syncMark = (e) => `${e.season}:${e.episode}:${Object.keys(e.watched || {}).length}:${e.translation?.path || ''}`;
+
+async function pushSync(e, force) {
+  if (!e?.key) return;
+  const mark = syncMark(e);
+  const prev = lastPush.get(e.key);
+  if (!force && prev && prev.mark === mark && Date.now() - prev.at < SYNC_EVERY) return;
+  lastPush.set(e.key, { at: Date.now(), mark });
+  const item = { [SYNC_PREFIX + e.key]: atPackEntry(e) };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await chrome.storage.sync.set(item);
+      return;
+    } catch (err) {
+      // места нет — вытесняем самую старую запись из sync (у других компьютеров она остаётся)
+      if (!/quota/i.test(String(err?.message || err)) || !(await evictOldestSync(e.key))) return;
+    }
+  }
+}
+
+async function evictOldestSync(keep) {
+  const all = await chrome.storage.sync.get(null);
+  let oldest = null;
+  for (const [k, v] of Object.entries(all))
+    if (k.startsWith(SYNC_PREFIX) && k !== SYNC_PREFIX + keep && (!oldest || (v?.up || 0) < oldest.up))
+      oldest = { k, up: v?.up || 0 };
+  if (!oldest) return false;
+  await chrome.storage.sync.remove(oldest.k);
+  return true;
+}
+
+async function deleteSync(keys) {
+  const { deleted = {} } = await chrome.storage.sync.get('deleted');
+  const now = Date.now();
+  for (const k of keys) {
+    deleted[k] = now;
+    lastPush.delete(k);
+  }
+  // хранить вечно незачем: оставляем самые свежие
+  const kept = Object.entries(deleted).sort((a, b) => b[1] - a[1]).slice(0, TOMBSTONES_MAX);
+  await chrome.storage.sync.set({ deleted: Object.fromEntries(kept) }).catch(() => {});
+  await chrome.storage.sync.remove(keys.map((k) => SYNC_PREFIX + k)).catch(() => {});
+}
+
+// пришло с другого компьютера (или полная сверка при запуске): более свежее — в локальную историю
+async function applyRemote(entries, deleted) {
+  const h = await getHistory();
+  let changed = false;
+  for (const p of entries) {
+    const remote = atUnpackEntry(p);
+    if (!remote) continue;
+    if (deleted?.[remote.key] >= remote.updatedAt) continue; // удалили позже этой записи
+    const merged = atMergeRemote(h[remote.key], remote);
+    if (merged) {
+      h[remote.key] = merged;
+      changed = true;
+    }
+  }
+  for (const [k, at] of Object.entries(deleted || {}))
+    if (h[k] && (h[k].updatedAt || 0) <= at) {
+      delete h[k];
+      changed = true;
+    }
+  if (changed) await saveHistory(h);
+}
+
+// Полная сверка при установке и запуске: забрать чужое, отдать своё, чего в sync нет или там старее.
+async function reconcileSync() {
+  const all = await chrome.storage.sync.get(null);
+  const remote = Object.entries(all)
+    .filter(([k]) => k.startsWith(SYNC_PREFIX))
+    .map(([, v]) => v);
+  await applyRemote(remote, all.deleted);
+  const h = await getHistory();
+  const ups = Object.fromEntries(remote.map((p) => [p?.k, p?.up || 0]));
+  const mine = Object.values(h)
+    .filter((e) => (ups[e.key] ?? -1) < (e.updatedAt || 0))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); // свежие первыми: им место в sync важнее
+  for (const e of mine) await pushSync(e, true);
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync') return;
+  const entries = [];
+  for (const [k, c] of Object.entries(changes)) if (k.startsWith(SYNC_PREFIX) && c.newValue) entries.push(c.newValue);
+  const deleted = changes.deleted?.newValue;
+  if (entries.length || deleted) serial(() => applyRemote(entries, deleted));
+});
+chrome.runtime.onInstalled.addListener(() => serial(reconcileSync));
+chrome.runtime.onStartup?.addListener(() => serial(reconcileSync));
+
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   serial(() => handle(msg, sender))
     .then(reply)
@@ -212,6 +315,8 @@ async function handle(msg, sender) {
       updatedAt: Date.now(),
     };
     await saveHistory(h);
+    // в sync — сразу на паузе, смене серии и досмотре (force), иначе не чаще раза в минуту
+    await pushSync(h[key], msg.force);
     chrome.tabs.sendMessage(tabId, { type: 'updated', entry: h[key] }).catch(() => {});
     return { ok: true };
   }
@@ -240,7 +345,9 @@ async function handle(msg, sender) {
     const key = keyOf(meta.site, meta.url);
     if (h[key]) {
       h[key].translation = msg.translation;
+      h[key].updatedAt = Date.now(); // свежее — чтобы выбор дошёл до другого компьютера
       await saveHistory(h);
+      await pushSync(h[key], true);
       chrome.tabs.sendMessage(tabId, { type: 'updated', entry: h[key] }).catch(() => {});
     } else {
       await setPage(tabId, { ...meta, translation: msg.translation });
@@ -254,7 +361,9 @@ async function handle(msg, sender) {
     const e = h[msg.key];
     if (!e) return { entry: null };
     e.translation = null;
+    e.updatedAt = Date.now();
     await saveHistory(h);
+    await pushSync(e, true);
     if (tabId !== undefined) chrome.tabs.sendMessage(tabId, { type: 'updated', entry: e }).catch(() => {});
     return { entry: e };
   }
@@ -313,6 +422,7 @@ async function handle(msg, sender) {
     if (patch.episode === 0) delete patch.episode;
     Object.assign(e, patch, { updatedAt: Date.now() });
     await saveHistory(h);
+    await pushSync(e, true);
     return { entry: e };
   }
 
@@ -328,6 +438,13 @@ async function handle(msg, sender) {
     const h = await getHistory();
     h[e.key] ??= e;
     await saveHistory(h);
+    // «Вернуть» отменяет и удаление на других компьютерах: снимаем отметку, отдаём запись заново
+    const { deleted = {} } = await chrome.storage.sync.get('deleted');
+    if (e.key in deleted) {
+      delete deleted[e.key];
+      await chrome.storage.sync.set({ deleted }).catch(() => {});
+    }
+    await pushSync(h[e.key], true);
     return { ok: true };
   }
 
@@ -335,11 +452,14 @@ async function handle(msg, sender) {
     const h = await getHistory();
     delete h[msg.key];
     await saveHistory(h);
+    await deleteSync([msg.key]);
     return { ok: true };
   }
 
   if (msg.type === 'clear') {
+    const keys = Object.keys(await getHistory());
     await chrome.storage.local.set({ history: {} });
+    await deleteSync(keys);
     return { ok: true };
   }
   return null;

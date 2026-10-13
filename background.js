@@ -420,6 +420,12 @@ async function handle(msg, sender) {
     const patch = { episode: int(p.episode), time: int(p.time), duration: int(p.duration) };
     for (const k of Object.keys(patch)) if (patch[k] === undefined) delete patch[k];
     if (patch.episode === 0) delete patch.episode;
+    // человек сказал «я на этой серии» — значит, она не досмотрена, иначе «‹ ›» ничего не меняли бы
+    // (отметка осталась бы, и попап снова показал бы следующую; регрессия 13.10)
+    if (patch.episode && e.watched) {
+      e.watched = { ...e.watched };
+      delete e.watched[`${e.season || 0}:${patch.episode}`];
+    }
     Object.assign(e, patch, { updatedAt: Date.now() });
     await saveHistory(h);
     await pushSync(e, true);

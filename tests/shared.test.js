@@ -1,7 +1,7 @@
 // Общая логика попапа и плашки (shared.js).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { atStatus, atFmtTime, atSafeUrl, atSiteOf, atKodikSrc, atTrackedSite, atParseLabel } = require('../shared.js');
+const { atStatus, atFmtTime, atSafeUrl, atSiteOf, atKodikSrc, atTrackedSite, atParseLabel, atPackWatched, atUnpackWatched, atPackEntry, atUnpackEntry, atMergeRemote } = require('../shared.js');
 
 test('atStatus: недосмотренная — та же серия, досмотренная — следующая, последняя — весь тайтл', () => {
   assert.deepEqual(atStatus({ season: 1, episode: 6, watched: {} }), { done: false, finished: false, next: 6 });
@@ -77,4 +77,39 @@ test('atParseLabel: русские и английские подписи сер
   assert.equal(atParseLabel('Season 2', 'season'), 2);
   assert.equal(atParseLabel('2 сезон', 'episode'), null);
   assert.equal(atParseLabel('Серия 99999', 'episode'), null);
+});
+
+test('atPackWatched: досмотренное диапазонами и обратно без потерь', () => {
+  const watched = {};
+  for (let e = 1; e <= 120; e++) watched[`1:${e}`] = true;
+  watched['1:125'] = true;
+  watched['2:1'] = true;
+  const packed = atPackWatched(watched);
+  assert.deepEqual(packed, { 1: '1-120,125', 2: '1' });
+  assert.deepEqual(atUnpackWatched(packed), watched);
+  // весь «Блич» досмотрен — десяток байт вместо ~4 КБ
+  const all = {};
+  for (let e = 1; e <= 366; e++) all[`1:${e}`] = true;
+  assert.ok(JSON.stringify(atPackWatched(all)).length < 20);
+  // мусор из sync не превращается в миллион серий
+  assert.deepEqual(atUnpackWatched({ 1: '5-1,x,1-999999' }), {});
+});
+
+test('atPackEntry/atUnpackEntry: запись переживает sync; опасный адрес не принимается', () => {
+  const e = {
+    key: 'k', site: 's', url: 'https://x.example/a', title: 'T', season: 1, episode: 4, time: 72, duration: 1384,
+    total: 12, watched: { '1:3': true }, updatedAt: 5, poster: 'https://x.example/p.jpg', translation: null,
+  };
+  const back = atUnpackEntry(JSON.parse(JSON.stringify(atPackEntry(e))));
+  assert.deepEqual(back, e);
+  assert.equal(atUnpackEntry({ ...atPackEntry(e), u: 'javascript:alert(1)' }), null);
+});
+
+test('atMergeRemote: свежее побеждает, постер и число серий не теряются', () => {
+  const local = { key: 'k', episode: 3, updatedAt: 10, poster: 'p', total: 12 };
+  assert.equal(atMergeRemote(local, { key: 'k', episode: 2, updatedAt: 9 }), null);
+  const m = atMergeRemote(local, { key: 'k', episode: 5, updatedAt: 11, total: null });
+  assert.equal(m.episode, 5);
+  assert.equal(m.poster, 'p');
+  assert.equal(m.total, 12);
 });

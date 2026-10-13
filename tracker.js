@@ -158,14 +158,24 @@
     });
   }
 
-  function poll() {
-    const v = mainVideo();
-    if (!v) return;
-    const ep = readFromDom('episode');
-    const se = readFromDom('season');
+  // Новая серия — новое видео: время и длительность прошлой к ней не относятся. Плеер меняет подпись
+  // «15 серия» сразу, а новое видео ещё грузится (currentTime 0, длительность неизвестна) — без сброса
+  // 15-я получала время конца 14-й, 1394 из 1394, и считалась досмотренной (регрессия 13.10).
+  function setEpisode(ep, se, v) {
     const changed = (ep && ep !== state.episode) || (se && se !== state.season);
     if (ep) state.episode = ep;
     if (se) state.season = se;
+    if (changed) {
+      state.time = v?.currentTime || 0;
+      state.duration = isFinite(v?.duration) && v.duration > 0 ? v.duration : 0;
+    }
+    return changed;
+  }
+
+  function poll() {
+    const v = mainVideo();
+    if (!v) return;
+    const changed = setEpisode(readFromDom('episode'), readFromDom('season'), v);
     if (isFinite(v.duration) && v.duration > 0) state.duration = v.duration;
     if (v.currentTime > 0) state.time = v.currentTime;
     if (!v.paused && v.currentTime > 0) state.played = true;
@@ -192,7 +202,7 @@
       'play',
       (e) => {
         if (e.target?.tagName !== 'VIDEO') return;
-        state.episode = readFromDom('episode') || state.episode;
+        setEpisode(readFromDom('episode'), null, e.target);
         tryResume(e.target);
       },
       true

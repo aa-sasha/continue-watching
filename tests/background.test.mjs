@@ -374,3 +374,15 @@ test('sync: новая установка забирает историю из s
   assert.deepEqual((await b.call({ type: 'list' })).list.map((e) => e.title).sort(), ['R1', 'R2']);
   assert.ok(cloud.data['e:newdeaf:/anime/R2.html']); // своё отдала
 });
+
+test('ручной выбор серии снимает с неё отметку «досмотрено» — иначе «‹» ничего не меняет', async () => {
+  // Регрессия 13.10: ложно досмотренную 15-ю (см. tests/frame.test.mjs) нельзя было вернуть кнопкой
+  // «‹» — серия ставилась 15-я, но отметка оставалась, и попап снова показывал «Дальше 16».
+  const { call } = boot();
+  await call({ type: 'page', meta: meta('M') }, 1);
+  await call({ type: 'progress', season: 1, episode: 15, time: 1394, duration: 1394 }, 1);
+  const key = 'newdeaf:/anime/M.html';
+  const { entry } = await call({ type: 'manual', key, patch: { episode: 15, time: 0, duration: 0 } });
+  assert.equal(require("../shared.js").atStatus(entry).next, 15);
+  assert.equal(entry.watched['1:15'], undefined);
+});

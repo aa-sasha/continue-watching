@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Политика конфиденциальности расширения Chrome «Anime Tracker — продолжить просмотр»">
+<title>Политика Anime Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;800&display=swap">
+<style>
+  /* Лист документа в тонах расширения (r6tv bento): ячейка на фоне страницы, одна колонка для чтения */
+  :root {
+    --bg: #f3f4f6; --cell: #ffffff; --fg: #14171d; --muted: #5b616d; --line: #e3e5e9; --mark: #2f9e63;
+    --font: Roboto, -apple-system, 'Segoe UI', Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0a0c10; --cell: #14171d; --fg: #f1f3f6; --muted: #9aa0ab; --line: #262b35; --mark: #55c989; color-scheme: dark; }
+  }
+  :root[data-theme="dark"] { --bg: #0a0c10; --cell: #14171d; --fg: #f1f3f6; --muted: #9aa0ab; --line: #262b35; --mark: #55c989; color-scheme: dark; }
+  html { color-scheme: light; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/1.65 var(--font); padding-inline: 16px; padding-block: 40px 56px; }
+  main { max-width: 680px; margin: 0 auto; display: grid; gap: 12px; }
+  .cell { background: var(--cell); border-radius: 14px; padding: 24px 28px; min-width: 0; }
+  .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 30px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; margin: 8px 0 8px; text-wrap: balance; }
+  h2 { font-size: 18px; font-weight: 700; margin: 0 0 8px; }
+  p, ul { margin: 0; } p + p, p + ul, ul + p { margin-top: 8px; }
+  ul { padding-left: 20px; } li + li { margin-top: 4px; }
+  .lead { font-size: 18px; }
+  .lead strong { color: var(--mark); font-weight: 700; }
+  code { font: 500 14px/1 ui-monospace, Consolas, monospace; background: var(--line); padding: 2px 6px; border-radius: 6px; }
+  .date { color: var(--muted); font-size: 14px; }
+  @media (max-width: 480px) { .cell { padding: 20px; } h1 { font-size: 24px; } }
+</style>
+
+</head>
+<body>
+<main>
+  <section class="cell">
+    <div class="eyebrow">Расширение Chrome · YummyAnime и NewDeaf</div>
+    <h1>Политика конфиденциальности «Anime Tracker — продолжить просмотр»</h1>
+    <p class="date">Действует с 14 октября 2026 года</p>
+  </section>
+
+  <section class="cell">
+    <p class="lead">История просмотра хранится <strong>у вас</strong>: на устройстве и, если включена синхронизация Chrome, в вашем аккаунте Google. У расширения нет серверов, аналитики и рекламы; разработчику и третьим лицам данные не передаются.</p>
+  </section>
+
+  <section class="cell">
+    <h2>Где работает</h2>
+    <p>Расширение сделано для сайтов YummyAnime (yummyanime.tv, yummyani.me) и NewDeaf (*.newdeaf.*). Видеоплееры на них встроены с других, часто меняющихся доменов, поэтому скрипт расширения подключается к каждой странице и каждому окну плеера. Если верхняя страница — не один из этих сайтов, скрипт сразу завершается: ничего не читает и ничего не хранит.</p>
+  </section>
+
+  <section class="cell">
+    <h2>Какие данные хранятся</h2>
+    <p>Только со страниц сериалов на этих сайтах и только после того, как видео действительно воспроизводилось:</p>
+    <ul>
+      <li>адрес и название страницы сериала, адрес обложки из метаданных страницы, число серий;</li>
+      <li>номер сезона и серии, момент остановки, длительность видео, отметки о досмотренных сериях;</li>
+      <li>выбранный на странице плеер и выбранная в плеере Kodik озвучка (название и адрес её плеера);</li>
+      <li>время последнего просмотра.</li>
+    </ul>
+  </section>
+
+  <section class="cell">
+    <h2>Где хранятся</h2>
+    <p>В хранилище браузера на вашем устройстве (<code>chrome.storage.local</code>). Если в Chrome включена синхронизация, сжатая копия истории передаётся в синхронизацию Chrome (<code>chrome.storage.sync</code>), чтобы она была на всех ваших компьютерах с этим профилем. Синхронизацию выполняет сам Chrome через ваш аккаунт Google.</p>
+    <p>Единственный сетевой запрос расширения — загрузка обложки сериала в его окне, с того же сайта, где вы смотрели.</p>
+  </section>
+
+  <section class="cell">
+    <h2>Что расширение меняет на сайтах</h2>
+    <ul>
+      <li>Над плеером показывает плашку «Продолжить: N серия с минуты M» с кнопками правки серии.</li>
+      <li>Включает вкладку плеера, которой вы пользовались в прошлый раз (по умолчанию Kodik), и прокручивает страницу к плееру.</li>
+      <li>Открывает плеер Kodik на нужной серии в выбранной вами озвучке и после старта перематывает к месту остановки.</li>
+    </ul>
+  </section>
+
+  <section class="cell">
+    <h2>Как удалить данные</h2>
+    <ul>
+      <li>Одна запись — крестик рядом с ней в окне расширения.</li>
+      <li>Вся история — кнопка «Очистить историю» (удаляет и копию в синхронизации).</li>
+      <li>Всё сразу — удаление расширения из Chrome.</li>
+    </ul>
+  </section>
+
+  <section class="cell">
+    <h2>Изменения и связь</h2>
+    <p>Если политика изменится, новая версия появится по этому же адресу с новой датой. Вопросы — через вкладку «Поддержка» на странице расширения в Chrome Web Store.</p>
+  </section>
+</main>
+</body>
+</html>

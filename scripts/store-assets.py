@@ -2,7 +2,7 @@
 # Настоящий попап сборки dist/store с вымышленными данными (поддельный chrome.* API), снимок —
 # Chrome без окна. Названия и постеры выдуманные: в карточке нет чужих брендов и контента.
 # Запуск: node scripts/build.mjs && python scripts/store-assets.py
-import os, shutil, subprocess
+import os, re, shutil, subprocess
 from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -107,3 +107,38 @@ for f in os.listdir(OUT):
     if f.endswith('.png') and not f.startswith('store-icon'):
         p = os.path.join(OUT, f)
         Image.open(p).convert('RGB').save(p)
+
+# ── товар «Anime Tracker» (личная версия в магазине): попап dist/personal, записи YummyAnime/NewDeaf ──
+# Названия и постеры вымышленные, как и выше; сайты — те, для которых версия сделана.
+WORK2 = os.path.join(ROOT, 'dist', 'store-assets-personal')
+shutil.rmtree(WORK2, ignore_errors=True)
+shutil.copytree(os.path.join(ROOT, 'dist', 'personal'), WORK2)
+for i in range(3):
+    shutil.copy(os.path.join(WORK, f'poster{i}.png'), WORK2)
+SUB = "{ title:'Субтитры', type:'sub', path:'/serial/1/a/720p' }"
+DUB = "{ title:'Студия', type:'dub', path:'/serial/2/b/720p' }"
+FAKE2 = f"""<script>
+const NOW = Date.now();
+const LIST = [
+  {{ key:'a', site:'yummyanime', url:'https://yummyanime.tv/a.html', title:'Северный экспресс', poster:'poster0.png', season:1, episode:15, time:418, duration:1384, total:24, watched:{{}}, translation:{SUB}, updatedAt:NOW-60000 }},
+  {{ key:'b', site:'newdeaf', url:'https://a.newdeaf.co/anime/b.html', title:'Хроники маяка', poster:'poster1.png', season:2, episode:3, time:1300, duration:1400, total:10, watched:{{'2:3':true}}, updatedAt:NOW-3*3600e3 }},
+  {{ key:'c', site:'yummyanime', url:'https://yummyanime.tv/c.html', title:'Город после дождя', poster:'poster2.png', season:1, episode:8, time:905, duration:1440, total:12, watched:{{}}, translation:{DUB}, updatedAt:NOW-26*3600e3 }},
+];
+window.chrome = {{ runtime: {{ sendMessage: async (m) => (m.type === 'list' ? {{ list: LIST }} : {{ ok: true }}) }} }};
+</script>"""
+h2 = open(os.path.join(WORK2, 'popup.html'), encoding='utf-8').read()
+h2 = h2.replace('<script src="build.js"></script>', FAKE2 + '\n  <script src="build.js"></script>')
+h2 = h2.replace('<script src="popup.js"></script>',
+    '<script>const _safe = atSafeUrl; atSafeUrl = (u) => (/^poster[0-9][.]png$/.test(u) ? u : _safe(u));</script>\n'
+    '  <script src="popup.js"></script>')
+open(os.path.join(WORK2, 'popup.html'), 'w', encoding='utf-8').write(h2)
+page = open(os.path.join(WORK, 'screenshot-1.html'), encoding='utf-8').read()
+page = page.replace('Продолжить просмотр</div>', 'Anime Tracker</div>', 1)
+page = re.sub(r'<h1>.*?</h1><p>.*?</p>',
+    '<h1>YummyAnime и NewDeaf: где вы остановились</h1><p>Серия, минута и озвучка. Нажмите на сериал — '
+    'откроется плеер Kodik на той же серии в той же озвучке и перемотает к месту остановки.</p>', page, flags=re.S)
+page = page.replace('popup.html?mode=tracked', 'popup.html').replace('height:540px', 'height:470px')
+p2 = os.path.join(WORK2, 'anime-screenshot-1.html')
+open(p2, 'w', encoding='utf-8').write(page)
+shoot(p2, os.path.join(OUT, 'anime-screenshot-1.png'), 1280, 800)
+Image.open(os.path.join(OUT, 'anime-screenshot-1.png')).convert('RGB').save(os.path.join(OUT, 'anime-screenshot-1.png'))

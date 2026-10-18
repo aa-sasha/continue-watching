@@ -1,12 +1,10 @@
 'use strict';
 
-// подпись сайта в эйбрау; в магазинной сборке сайт — это его хост
+// подпись сайта в эйбрау
 const SITE_NAME = {
-  // @personal-start
   newdeaf: 'NewDeaf',
   yummyanime: 'YummyAnime',
   yummyani: 'YummyAni',
-  // @personal-end
 };
 
 const fmt = atFmtTime; // shared.js
@@ -274,84 +272,3 @@ btnClear.addEventListener('click', async () => {
 document.getElementById('btnRetry').addEventListener('click', () => load());
 
 load();
-initSiteBar();
-
-// ── «Отслеживать этот сайт» (сборка для магазина) ──
-// Доступа к сайтам по умолчанию нет: человек выдаёт его сам, для конкретного сайта. Окна плеера
-// часто живут на другом домене — их адреса собираем заранее, при открытии попапа: запрос доступа
-// Chrome принимает только прямо в обработчике нажатия, после await он уже не сработает.
-async function initSiteBar() {
-  if (AT_BUILD !== 'store') {
-    // @personal-start
-    document.getElementById('emptySub').innerHTML = 'Откройте тайтл на YummyAnime или NewDeaf<br>и включите серию';
-    // @personal-end
-    return;
-  }
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  let url;
-  try {
-    url = new URL(tab?.url || '');
-  } catch {
-    return;
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return;
-  const host = atHostKey(url.hostname);
-  const { sites = [] } = await chrome.storage.local.get('sites');
-  const tracked = atTrackedSite(url.hostname, sites);
-  // пустой список говорит, что делать именно здесь, а не общую инструкцию
-  document.getElementById('emptySub').textContent = tracked
-    ? 'Включите серию — она появится здесь'
-    : 'Нажмите «Отслеживать» и включите серию';
-
-  let frames = [];
-  if (!tracked) {
-    try {
-      const [res] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: playerFrameOrigins });
-      frames = res?.result || [];
-    } catch {
-      /* страница не даёт заглянуть внутрь (магазин Chrome, PDF) — отслеживаем только сам сайт */
-    }
-  }
-
-  const bar = document.getElementById('siteBar');
-  const btn = document.getElementById('btnSite');
-  document.getElementById('siteHost').textContent = host;
-  document.getElementById('siteState').textContent = tracked ? 'Отслеживается' : 'Не отслеживается';
-  btn.textContent = tracked ? 'Не отслеживать' : 'Отслеживать';
-  btn.classList.toggle('btn-site--primary', !tracked);
-  btn.title = tracked
-    ? 'Расширение перестанет видеть этот сайт и откажется от доступа к нему. История останется'
-    : 'Chrome спросит доступ к этому сайту' + (frames.length ? ' и к окну его плеера' : '');
-  bar.classList.remove('hidden');
-
-  btn.onclick = async () => {
-    if (tracked) {
-      await chrome.runtime.sendMessage({ type: 'untrackSite', host });
-      return initSiteBar();
-    }
-    const origins = [url.origin, ...frames.filter((o) => o !== url.origin)];
-    // заявка — на случай, если окно доступа закроет попап раньше ответа: тогда сайт добавит фон
-    chrome.storage.local.set({ pendingTrack: { host, origins, tabId: tab.id } });
-    const granted = await chrome.permissions.request({ origins: origins.map((o) => `${o}/*`) });
-    if (!granted) return chrome.storage.local.remove('pendingTrack');
-    await chrome.runtime.sendMessage({ type: 'trackSite', host, origins, tabId: tab.id });
-    initSiteBar();
-  };
-}
-
-// Выполняется В СТРАНИЦЕ (chrome.scripting): адреса крупных окон-плееров с других доменов.
-// Мелкие окна (реклама, кнопки соцсетей) не берём — доступ к ним не нужен.
-function playerFrameOrigins() {
-  const out = new Set();
-  for (const f of document.querySelectorAll('iframe')) {
-    const r = f.getBoundingClientRect();
-    if (r.width < 320 || r.height < 180) continue;
-    try {
-      const u = new URL(f.src);
-      if ((u.protocol === 'https:' || u.protocol === 'http:') && u.origin !== location.origin) out.add(u.origin);
-    } catch {
-      /* about:blank и srcdoc */
-    }
-  }
-  return [...out];
-}

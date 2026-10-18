@@ -1,10 +1,7 @@
 'use strict';
 
-// сборка (build.js) и общая логика (shared.js); в тестах под node importScripts подменяется
-if (typeof importScripts === 'function') importScripts('build.js', 'shared.js');
-// Сборка для магазина — универсальный трекер: сайты добавляет человек, доступ к ним выдаёт Chrome.
-// Личная — со списком сайтов в коде (AT_SITES) и модулями под них.
-const STORE = AT_BUILD === 'store';
+// общая логика (shared.js); в тестах под node importScripts подменяется
+if (typeof importScripts === 'function') importScripts('shared.js');
 
 // История просмотра в chrome.storage.local (а не sync: прогресс пишется раз в ~10 с, у sync лимит
 // 120 записей в минуту и 8 КБ на ключ). Одна запись на тайтл:
@@ -25,81 +22,6 @@ const getPage = async (tabId) => (await chrome.storage.session.get(`tab_${tabId}
 
 const keyOf = (site, url) => `${site}:${new URL(url).pathname}`;
 
-// ── отслеживаемые сайты (сборка для магазина) ──
-// sites = [{ host: 'example.com', origins: ['https://www.example.com', 'https://player.cdn.net'] }]
-// origins — сам сайт и окна его плеера с других доменов: туда тоже нужен доступ, чтобы читать <video>.
-const getSites = async () => (await chrome.storage.local.get('sites')).sites || [];
-const ORIGIN = /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i;
-const pattern = (origin) => `${origin}/*`;
-const TRACKER_JS = ['build.js', 'shared.js', 'tracker.js'];
-
-/** id сайта для хоста: в магазинной сборке — только добавленный человеком. */
-async function siteOfHost(hostname) {
-  // @personal-start
-  if (!STORE) return atSiteOf(hostname);
-  // @personal-end
-  return atTrackedSite(hostname, await getSites())?.host || null;
-}
-
-// Скрипт трекера — только на сайтах, к которым человек дал доступ. Регистрация живёт между
-// перезапусками браузера, но после правки списка её пересобираем целиком.
-async function syncRegistration() {
-  if (!STORE) return;
-  const matches = [];
-  for (const s of await getSites())
-    for (const o of s.origins) if (await chrome.permissions.contains({ origins: [pattern(o)] })) matches.push(pattern(o));
-  const had = await chrome.scripting.getRegisteredContentScripts({ ids: ['tracker'] });
-  if (had.length) await chrome.scripting.unregisterContentScripts({ ids: ['tracker'] });
-  if (!matches.length) return;
-  await chrome.scripting.registerContentScripts([
-    { id: 'tracker', matches: [...new Set(matches)], js: TRACKER_JS, allFrames: true, runAt: 'document_idle' },
-  ]);
-}
-
-async function addSite(host, origins) {
-  host = atHostKey(host);
-  origins = [...new Set((origins || []).filter((o) => typeof o === 'string' && ORIGIN.test(o)))];
-  if (!host || !origins.length) return false;
-  // без выданного доступа сайт не добавляем: иначе в списке «отслеживается» то, что не работает
-  if (!(await chrome.permissions.contains({ origins: origins.map(pattern) }))) return false;
-  const sites = (await getSites()).filter((s) => s.host !== host);
-  sites.push({ host, origins });
-  await chrome.storage.local.set({ sites });
-  await syncRegistration();
-  return true;
-}
-
-if (STORE) {
-  chrome.runtime.onStartup?.addListener(() => serial(syncRegistration));
-  // Окно разрешения Chrome может закрыть попап раньше, чем он узнает ответ. Поэтому попап заранее
-  // кладёт заявку (pendingTrack), а сайт добавляет фон, когда доступ действительно выдан.
-  chrome.permissions.onAdded?.addListener(() =>
-    serial(async () => {
-      const { pendingTrack } = await chrome.storage.local.get('pendingTrack');
-      if (!pendingTrack) return;
-      if (await addSite(pendingTrack.host, pendingTrack.origins)) {
-        await chrome.storage.local.remove('pendingTrack');
-        injectNow(pendingTrack.tabId);
-      }
-    })
-  );
-  // доступ отозвали в настройках Chrome — сайт больше не отслеживается
-  chrome.permissions.onRemoved?.addListener(() =>
-    serial(async () => {
-      const kept = [];
-      for (const s of await getSites())
-        if (await chrome.permissions.contains({ origins: [pattern(s.origins[0])] })) kept.push(s);
-      await chrome.storage.local.set({ sites: kept });
-      await syncRegistration();
-    })
-  );
-}
-
-// только что добавленный сайт начинает отслеживаться сразу, без перезагрузки вкладки
-function injectNow(tabId) {
-  if (!Number.isInteger(tabId)) return;
-  chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: TRACKER_JS }).catch(() => {});
-}
 
 async function getHistory() {
   return (await chrome.storage.local.get('history')).history || {};
@@ -116,9 +38,7 @@ async function saveHistory(h) {
   await chrome.storage.local.set({ history: h });
 }
 
-chrome.runtime.onInstalled.addListener(() => serial(syncRegistration));
 
-// @personal-start перенос истории YummyAni Tracker 1.x
 // Перенос истории из YummyAni Tracker 1.x (chrome.storage.sync: watchIndex + watch_{slug})
 // В общей очереди serial: иначе сверка с sync (тоже на onInstalled) читала историю до переноса и
 // записывала после — перенесённое пропадало, а флаг migrated уже не давал повторить (ревью 18.10).
@@ -152,7 +72,6 @@ async function migrateFromV1() {
   }
   await chrome.storage.local.set({ migrated: true });
 }
-// @personal-end
 
 
 // ── синхронизация между компьютерами одного профиля Chrome (chrome.storage.sync) ──
@@ -341,7 +260,7 @@ async function restoreEntries(entries, replace) {
 
 // Команды, которые шлёт только попап. Контент-скрипт стоит во всех фреймах любых сайтов, и
 // скомпрометированная страница не должна чистить историю или подкладывать записи (ревью 18.10).
-const POPUP_ONLY = new Set(['list', 'remove', 'restore', 'restoreAll', 'clear', 'trackSite', 'untrackSite']);
+const POPUP_ONLY = new Set(['list', 'remove', 'restore', 'restoreAll', 'clear']);
 const fromExtensionPage = (sender) => !sender.tab && (sender.url || '').startsWith(chrome.runtime.getURL(''));
 
 async function handle(msg, sender) {
@@ -392,7 +311,7 @@ async function handle(msg, sender) {
       poster: meta.poster || prev.poster,
       total: meta.total || prev.total,
       player: prev.player || meta.player,
-      // Озвучка плеера (личная сборка) — чтобы открыть ту же, а не по умолчанию. Перезаписывает
+      // Озвучка плеера Kodik — чтобы открыть ту же, а не по умолчанию. Перезаписывает
       // сохранённую только выбранная человеком в меню плеера (chosen): ту, что плеер подставил сам,
       // записать как выбор нельзя (11.10). Пустое место заполняет любая реально игравшая.
       translation: (msg.chosen && msg.translation) || prev.translation || meta.translation || msg.translation || null,
@@ -410,7 +329,6 @@ async function handle(msg, sender) {
     return { ok: true };
   }
 
-  // @personal-start выбор плеера и озвучки на странице
   // какой плеер страницы выбрал пользователь («Kodik», «Плеер 2») — откроем его в следующий раз
   if (msg.type === 'player') {
     const meta = await getPage(tabId);
@@ -456,7 +374,6 @@ async function handle(msg, sender) {
     if (tabId !== undefined) chrome.tabs.sendMessage(tabId, { type: 'updated', entry: e }).catch(() => {});
     return { entry: e };
   }
-  // @personal-end
 
   // Окно плеера спрашивает, с какого места продолжать. Ключ — по НАСТОЯЩЕМУ адресу вкладки
   // (sender.tab.url), а не по мете, которую присылает верхняя страница: окно плеера спрашивает
@@ -466,41 +383,13 @@ async function handle(msg, sender) {
     const url = sender.tab?.url;
     let site = null;
     try {
-      site = url ? await siteOfHost(new URL(url).hostname) : null;
+      site = url ? atSiteOf(new URL(url).hostname) : null;
     } catch {
       site = null;
     }
     if (!site) return { entry: null };
     const h = await getHistory();
     return { entry: h[keyOf(site, url)] || null };
-  }
-
-  // «Отслеживать этот сайт» из попапа (доступ уже выдан окном Chrome)
-  if (msg.type === 'trackSite') {
-    if (!STORE) return { ok: false };
-    const ok = await addSite(msg.host, msg.origins);
-    if (ok) {
-      await chrome.storage.local.remove('pendingTrack');
-      injectNow(msg.tabId);
-    }
-    return { ok };
-  }
-
-  if (msg.type === 'untrackSite') {
-    if (!STORE) return { ok: false };
-    const host = atHostKey(msg.host);
-    const sites = await getSites();
-    const site = sites.find((s) => s.host === host);
-    if (!site) return { ok: false };
-    const rest = sites.filter((s) => s !== site);
-    await chrome.storage.local.set({ sites: rest });
-    // доступ возвращаем Chrome — кроме доменов, которые нужны другим отслеживаемым сайтам (общий
-    // CDN плеера): иначе у них молча переставало читаться видео (ревью 18.10). История остаётся.
-    const still = new Set(rest.flatMap((s) => s.origins));
-    const drop = site.origins.filter((o) => !still.has(o));
-    if (drop.length) await chrome.permissions.remove({ origins: drop.map(pattern) }).catch((err) => warn('отзыв доступа', err));
-    await syncRegistration();
-    return { ok: true };
   }
 
   if (msg.type === 'manual') {

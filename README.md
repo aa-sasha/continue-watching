@@ -1,9 +1,8 @@
-# Продолжить просмотр — трекер серий
+# Anime Tracker — продолжить просмотр
 
-Chrome-расширение: запоминает сезон, серию и момент, где вы остановились в видео, и возвращает к ним в один клик.
-Две сборки из одного кода (см. «Две сборки» ниже): универсальная для Chrome Web Store и личная — с модулями
-под **YummyAnime** (yummyanime.tv), **NewDeaf** (*.newdeaf.*) и плеер Kodik. Основа личной — YummyAni Tracker 1.1;
-его история переносится при установке. Оформление — дизайн-система r6tv (bento DS), иконки — Lucide (ISC).
+Chrome-расширение для **YummyAnime** (yummyanime.tv) и **NewDeaf** (*.newdeaf.*): запоминает сезон, серию, озвучку
+и момент, где вы остановились, и открывает плеер Kodik на нужном месте. История синхронизируется между
+компьютерами через профиль Chrome. Основа — YummyAni Tracker 1.1; его история переносится при установке. Оформление — дизайн-система r6tv (bento DS), иконки — Lucide (ISC).
 Лицензия — MIT. Правила работы с репозиторием — [CLAUDE.md](CLAUDE.md).
 
 ## Установка (Chrome)
@@ -21,19 +20,15 @@ Chrome-расширение: запоминает сезон, серию и мо
 - История в `chrome.storage.local` (до 200 тайтлов). Ключ — путь страницы без домена: NewDeaf
   меняет домен, а путь остаётся.
 
-## Две сборки
-- **Личная** (`dist/personal`, `anime-tracker.zip`) — всё выше: YummyAnime, NewDeaf, Kodik. Ставится «Загрузить распакованное».
-- **Для Chrome Web Store** (`dist/store`, `anime-tracker-store.zip`) — универсальный трекер `tracker.js`: сайты добавляет
-  человек кнопкой «Отслеживать этот сайт», доступ к ним — необязательное разрешение Chrome. Код под конкретные сайты
-  размечен `// @personal-start … // @personal-end` и вырезается; сборка падает, если упоминание осталось.
-
+## Сборка и магазин
 ```
-node scripts/build.mjs         # обе сборки в dist/
+node scripts/build.mjs         # dist/personal
 python scripts/icons.py        # значки из геометрии логотипа «Стопка серий»
-python scripts/store-assets.py # скриншоты 1280×800 и промо 440×280 в store/
-python scripts/pack.py         # архивы ../anime-tracker*.zip
+python scripts/store-assets.py # скриншот 1280×800 и промо 440×280 в store/
+python scripts/pack.py         # ../anime-tracker.zip (распакованная установка) и ../anime-tracker-cws.zip (магазин)
 ```
-Тексты карточки и обоснования прав — `store/LISTING.md`, политика — `store/PRIVACY.md` / `store/privacy.html`.
+Тексты карточки и обоснования прав — `store/LISTING-anime.md`, политика — `docs/privacy-anime.html`.
+Универсальная сборка «трекер серий» снята 18.10.2026 — она дублировала эту.
 
 ## Тесты
 `npm test` (Node 20+, без зависимостей): фоновая часть в песочнице с поддельным `chrome.storage` —

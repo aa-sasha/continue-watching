@@ -201,28 +201,6 @@ body {
 }
 .toast-action:focus-visible { outline: 2px solid var(--surface-page); outline-offset: 2px; }
 
-/* «Отслеживать этот сайт»: ячейка с хостом и одной кнопкой; главное действие — белая .btn-1 */
-.site-bar {
-  display: flex; align-items: center; gap: var(--s3);
-  background: var(--surface-cell); border-radius: var(--r); padding: var(--s3) var(--s3) var(--s3) var(--s4);
-}
-.site-info { flex: 1; min-width: 0; }
-.site-eyebrow {
-  font-size: var(--fs-min); font-weight: 700; letter-spacing: var(--eyebrow-ls);
-  text-transform: uppercase; color: var(--dim);
-}
-.site-host { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.btn-site {
-  flex: none; height: var(--btn-h-lg); padding: 0 var(--s3); border: 0; border-radius: var(--r-btn);
-  background: var(--surface-control); color: var(--muted); cursor: pointer;
-  font: inherit; font-size: var(--fs-min); font-weight: 700;
-  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
-}
-.btn-site:hover { background: var(--surface-control-hover); color: var(--text); }
-.btn-site--primary { background: var(--text); color: var(--surface-page); }
-.btn-site--primary:hover { background: #ffffff; color: var(--surface-page); }
-.btn-site:focus-visible { outline: 2px solid var(--accent-edge); outline-offset: 2px; }
-
 /* пока виден тост — отступ снизу, чтобы он не закрывал ‹ › последней карточки */
 body.has-toast .watch-list { padding-bottom: 48px; }
 .btn-retry { width: auto; padding: 0 var(--s4); margin-top: var(--s2); }

@@ -1,4 +1,4 @@
-// Окно плеера: настоящие content.js (личная) и tracker.js (магазин) в песочнице node:vm с поддельной
+// Окно плеера: настоящий content.js в песочнице node:vm с поддельной
 // страницей — подпись «N серия», один <video> и ручной опрос (setInterval не тикает сам).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,7 +44,6 @@ function frame(file, { topOrigin, origin, kodikChild = false }) {
       },
       onMessage: { addListener() {} },
     },
-    storage: { local: { get: async () => ({ sites: [{ host: new URL(topOrigin).hostname, origins: [topOrigin] }] }) } },
   };
   const winListeners = {};
   const win = { top: {}, addEventListener: (t, f) => (winListeners[t] ||= []).push(f) }; // окно плеера — не верхнее
@@ -65,7 +64,7 @@ function frame(file, { topOrigin, origin, kodikChild = false }) {
     },
     console,
   });
-  vm.runInContext(read('build.js') + read('shared.js'), ctx);
+  vm.runInContext(read('shared.js'), ctx);
   vm.runInContext(read(file), ctx);
   const fire = (type) => (listeners[type] || []).forEach((f) => f({ target: video }));
   // сообщение от окна Kodik в эту обёртку
@@ -79,10 +78,7 @@ const settle = () => new Promise((r) => setTimeout(r, 10));
 // Регрессия 13.10: Kodik сам включил 15 серию после 14-й. Подпись сменилась на «15 серия» сразу, а новое
 // видео ещё грузилось (currentTime 0, длительность неизвестна) — и 15-я получила время конца 14-й
 // (1394 из 1394), то есть «досмотрено», и попап предлагал 16-ю, пока шла 15-я.
-for (const [file, topOrigin, origin] of [
-  ['content.js', 'https://yummyanime.tv', 'https://kodikplayer.com'],
-  ['tracker.js', 'https://tv.example.com', 'https://player.example.net'],
-]) {
+for (const [file, topOrigin, origin] of [['content.js', 'https://yummyanime.tv', 'https://kodikplayer.com']]) {
   for (const withPlayEvent of [false, true]) {
     test(`${file}: автопереход на следующую серию не отмечает её досмотренной${withPlayEvent ? ' (через play)' : ''}`, async () => {
       const f = frame(file, { topOrigin, origin });
@@ -125,7 +121,7 @@ test('content.js: смена серии сообщением Kodik сбрасы�
   for (const m of ep15) assert.ok(!(m.duration > 0 && m.time / m.duration >= 0.9), `${m.time}/${m.duration}`);
 });
 
-for (const file of ['content.js', 'tracker.js']) {
+for (const file of ['content.js']) {
   test(`${file}: после перезагрузки расширения осиротевший скрипт перестаёт опрашивать страницу`, async () => {
     const f = frame(file, { topOrigin: 'https://yummyanime.tv', origin: 'https://kodikplayer.com' });
     await settle();

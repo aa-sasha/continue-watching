@@ -11,8 +11,8 @@ const require = createRequire(import.meta.url);
 
 // Облако chrome.storage.sync: одно на несколько «компьютеров» (boot с общим cloud). Изменение
 // доходит до всех подписчиков onChanged, как в Chrome. quota — лимит байт на всё (QUOTA_BYTES).
-function makeCloud({ quota = Infinity } = {}) {
-  return { data: {}, listeners: new Set(), quota, writes: 0 };
+function makeCloud({ quota = Infinity, quotaPerItem = Infinity } = {}) {
+  return { data: {}, listeners: new Set(), quota, quotaPerItem, writes: 0 };
 }
 
 // dir — откуда брать background.js и shared.js: исходники или готовая сборка (dist/store)
@@ -34,6 +34,8 @@ function boot({ build = 'personal', granted = () => true, dir = '..', cloud = ma
       await delay();
       if (n === 'sync') {
         if (size({ ...store.sync, ...o }) > cloud.quota) throw new Error('QUOTA_BYTES quota exceeded');
+        for (const [k, v] of Object.entries(o))
+          if (k.length + size(v) > cloud.quotaPerItem) throw new Error('QUOTA_BYTES_PER_ITEM quota exceeded');
         cloud.writes++;
       }
       const changes = {};
@@ -61,6 +63,7 @@ function boot({ build = 'personal', granted = () => true, dir = '..', cloud = ma
       onChanged: { addListener: (f) => cloud.listeners.add(f) },
     },
     runtime: {
+      getURL: (path) => `chrome-extension://test/${path}`,
       onInstalled: { addListener: (f) => onInstalled.push(f) },
       onStartup: { addListener() {} },
       onMessage: { addListener: (f) => (handler = f) },
@@ -83,13 +86,19 @@ function boot({ build = 'personal', granted = () => true, dir = '..', cloud = ma
   const names = Object.keys(shared);
   new Function('chrome', 'importScripts', 'AT_BUILD', ...names, src)(chrome, () => {}, build, ...names.map((n) => shared[n]));
   // sender.tab.url — адрес верхней страницы вкладки (Chrome отдаёт его при host_permissions)
-  const call = (msg, tabId = 0, url) => new Promise((r) => handler(msg, { tab: { id: tabId, url } }, r));
+  // без вкладки — сообщение из попапа (страница расширения), с вкладкой — из контент-скрипта
+  const call = (msg, tabId, url) =>
+    new Promise((r) =>
+      handler(msg, tabId === undefined && !url ? { url: 'chrome-extension://test/popup.html' } : { tab: { id: tabId ?? 0, url } }, r)
+    );
+  // то же сообщение, но от контент-скрипта чужой страницы
+  const callFromPage = (msg) => new Promise((r) => handler(msg, { tab: { id: 9, url: 'https://evil.example/' } }, r));
   // «установка расширения» на этом компьютере: обработчики onInstalled (сверка с sync и т. п.)
   const install = async () => {
     for (const f of onInstalled) await f();
     await idle();
   };
-  return { call, store, registered, install };
+  return { call, callFromPage, store, registered, install };
 }
 
 // дождаться, пока события sync разойдутся и очередь фона их обработает
@@ -385,4 +394,91 @@ test('ручной выбор серии снимает с неё отметку
   const { entry } = await call({ type: 'manual', key, patch: { episode: 15, time: 0, duration: 0 } });
   assert.equal(require("../shared.js").atStatus(entry).next, 15);
   assert.equal(entry.watched['1:15'], undefined);
+});
+
+test('«Отменить» после правки серии возвращает время; «Вернуть» после очистки — всю историю', async () => {
+  const { call } = boot();
+  await call({ type: 'page', meta: meta('U') }, 1);
+  await call({ type: 'progress', season: 1, episode: 6, time: 418, duration: 1384 }, 1);
+  const before = (await call({ type: 'list' })).list[0];
+  await call({ type: 'manual', key: before.key, patch: { episode: 7, time: 0, duration: 0 } });
+  await call({ type: 'restore', entry: before, replace: true });
+  const back = (await call({ type: 'list' })).list[0];
+  assert.equal(back.episode, 6);
+  assert.equal(back.time, 418);
+
+  await call({ type: 'page', meta: meta('V') }, 2);
+  await call({ type: 'progress', season: 1, episode: 2, time: 60, duration: 1384 }, 2);
+  const all = (await call({ type: 'list' })).list;
+  await call({ type: 'clear' });
+  assert.equal((await call({ type: 'list' })).list.length, 0);
+  await call({ type: 'restoreAll', entries: [...all, { key: 'x', url: 'javascript:alert(1)' }] });
+  assert.deepEqual((await call({ type: 'list' })).list.map((e) => e.title).sort(), ['U', 'V']);
+});
+
+// ── ревью кода 18.10 ──
+
+test('прогресс не пишется в тайтл, который уже не открыт во вкладке', async () => {
+  // мета вкладки от тайтла A, а вкладка уже на B (переход без перезагрузки) — запись A не трогаем
+  const { call } = boot();
+  const a = 'https://a.newdeaf.co/anime/A1.html';
+  await call({ type: 'page', meta: meta('A1') }, 1, a);
+  await call({ type: 'progress', season: 1, episode: 3, time: 300, duration: 1400 }, 1, a);
+  await call({ type: 'progress', season: 1, episode: 9, time: 50, duration: 1400 }, 1, 'https://a.newdeaf.co/anime/B1.html');
+  assert.equal((await call({ type: 'list' })).list[0].episode, 3);
+});
+
+test('первые секунды плеера не затирают место остановки той же серии; реклама — не досмотр', async () => {
+  const { call } = boot();
+  await call({ type: 'page', meta: meta('T1') }, 1);
+  await call({ type: 'progress', season: 1, episode: 4, time: 640, duration: 1400 }, 1);
+  await call({ type: 'progress', season: 1, episode: 4, time: 1, duration: 1400, force: true }, 1);
+  assert.equal((await call({ type: 'list' })).list[0].time, 640);
+  await call({ type: 'progress', season: 1, episode: 4, time: 700, duration: 1400 }, 1);
+  assert.equal((await call({ type: 'list' })).list[0].time, 700);
+  // 30-секундный ролик доигран — серия не досмотрена
+  await call({ type: 'progress', season: 1, episode: 5, time: 30, duration: 30 }, 1);
+  assert.equal((await call({ type: 'list' })).list[0].watched['1:5'], undefined);
+});
+
+test('команды попапа не принимаются от контент-скрипта страницы', async () => {
+  const { call, callFromPage } = boot();
+  await call({ type: 'page', meta: meta('P1') }, 1);
+  await call({ type: 'progress', season: 1, episode: 2, time: 60, duration: 1400 }, 1);
+  assert.equal(await callFromPage({ type: 'clear' }), null);
+  assert.equal(await callFromPage({ type: 'restore', entry: { key: 'x', url: 'https://phish.example/' } }), null);
+  assert.equal((await call({ type: 'list' })).list.length, 1);
+});
+
+test('sync: очистка большой истории доходит до другого компьютера (отметки по ключам, не одним объектом)', async () => {
+  // 8 КБ на запись: старый общий объект `deleted` на ~120 тайтлах не влезал, и очистка молча терялась
+  const cloud = makeCloud({ quotaPerItem: 8192 });
+  const a = boot({ cloud });
+  const b = boot({ cloud });
+  a.store.local.history = {};
+  for (let i = 0; i < 150; i++) {
+    const key = `newdeaf:/anime/very-long-title-number-${i}-season-one-subtitles.html`;
+    a.store.local.history[key] = {
+      key, site: 'newdeaf', url: `https://a.newdeaf.co/anime/very-long-title-number-${i}-season-one-subtitles.html`,
+      title: `T${i}`, season: 1, episode: 2, time: 30, duration: 1400, watched: {}, updatedAt: Date.now() - 1000,
+    };
+  }
+  await a.install();
+  await idle();
+  assert.equal((await b.call({ type: 'list' })).list.length, 150);
+  await a.call({ type: 'clear' });
+  await idle();
+  assert.equal((await b.call({ type: 'list' })).list.length, 0);
+  // и после перезапуска второго компьютера история не возвращается
+  await b.install();
+  await idle();
+  assert.equal((await a.call({ type: 'list' })).list.length, 0);
+});
+
+test('sync: «Не отслеживать» не отзывает домен плеера, общий с другим сайтом', async () => {
+  const { call, registered } = boot({ build: 'store' });
+  await call({ type: 'trackSite', host: 'x.com', origins: ['https://x.com', 'https://cdn.player.net'] });
+  await call({ type: 'trackSite', host: 'y.com', origins: ['https://y.com', 'https://cdn.player.net'] });
+  await call({ type: 'untrackSite', host: 'x.com' });
+  assert.deepEqual(registered.removed, ['https://x.com/*']);
 });

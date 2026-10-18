@@ -197,7 +197,8 @@ function atUnpackEntry(p) {
     duration: Number(p.d) || 0,
     total: Number.isInteger(p.n) ? p.n : null,
     watched: atUnpackWatched(p.w),
-    updatedAt: Number(p.up) || 0,
+    // часы другого компьютера могли спешить: «будущая» запись иначе побеждала бы все наши (ревью 18.10)
+    updatedAt: Math.min(Number(p.up) || 0, Date.now() + 5 * 60000),
   };
   if (p.po) e.poster = p.po;
   if (p.pl) e.player = p.pl;

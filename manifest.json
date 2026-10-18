@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Anime Tracker — продолжить просмотр",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtYO6UPFivSf/cDyDR1D38Fw5jxlDeb6fze+PSpz7NJQ0OO+1IetyhgkTINSgZCA9MQ9Z2LL+zQdu0wwXncEjs5cNZM0dkcIBvcEyBcnAv5vAeKFYeWDG3+81Hk24Cok9Nxfiy1IbLeC5VqX4aOoxMl1yF5eK+hn1GxS4OtVQH84WsklSsHhqwkHFhzVeeUP67kX6jpAGD5rsyoI/ECXbSBpXeOnrRH/wVCqU/e9ynZge/016mvQ3draWYvetfCFsroEXqi5x9NhFUfPvkeD9lgzw3HDtuofoW1qH1sLwPb10f7oCzcdZ9T4sJMdUTphTZrIYutiEI1BgS7nZY09QwwIDAQAB",
   "description": "Запоминает сезон, серию и момент остановки на YummyAnime и NewDeaf — как «Продолжить просмотр» на HDrezka.",
   "permissions": ["storage"],

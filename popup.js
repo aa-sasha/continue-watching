@@ -42,12 +42,17 @@ function render(list) {
   const ul = document.getElementById('watchList');
   const empty = document.getElementById('emptyState');
   ul.innerHTML = '';
+  // досмотренные целиком — вниз: первая карточка всегда та, что можно продолжить (порядок по свежести
+  // внутри групп сохраняется — сортировка устойчивая)
+  list = [...list].sort((a, b) => atStatus(a).finished - atStatus(b).finished);
   empty.classList.toggle('hidden', list.length > 0);
   document.getElementById('footer').classList.toggle('hidden', list.length === 0);
 
   for (const e of list) {
     const li = el('li', 'watch-item');
+    li.dataset.key = e.key; // по нему возвращаем фокус после перерисовки
     const a = el('a', 'watch-link');
+    a.dataset.role = 'open';
     const safe = atSafeUrl(e.url);
     if (safe) a.href = safe + '#at-continue'; // метка: страница сама прокрутит к плееру
     a.target = '_blank';
@@ -87,36 +92,33 @@ function render(list) {
     titleEl.title = e.title; // длинное название режется многоточием — полное по наведению
     info.appendChild(titleEl);
 
-    // «1 сезон 3 серия · 12:34 из 23:04» — как «последняя информация» на HDrezka
+    // Ряд 1 — «где я»: «1 сезон, 3 серия · 12:34 из 23:04», одной строкой без переноса.
+    // Чип озвучки раньше стоял здесь и выталкивал время на вторую строку.
     const season = e.season ? `${e.season} сезон, ` : '';
+    const next = atStatus(e).next;
     const line = finished
       ? `Досмотрено: все ${e.total} серий`
       : done
-        ? `Дальше ${season}${e.episode + 1} серия`
+        ? `Дальше ${season}${next} серия`
         : `${season}${e.episode} серия` + (e.time ? ` · ${fmt(e.time)}${e.duration ? ' из ' + fmt(e.duration) : ''}` : '');
-    const metaRow = el('div', 'watch-meta');
-    metaRow.appendChild(document.createTextNode(line));
-    // ярлык озвучки: SUB — субтитры, DUB · студия — озвучка; в ней же откроется плеер
+    info.appendChild(el('div', 'watch-meta watch-line', line));
+
+    // Ряд 2 — сколько осталось (считая серию на значке) и озвучка
+    const sub = el('div', 'watch-sub');
+    const left = e.total && !finished ? e.total - next + 1 : 0;
+    if (left > 0) sub.appendChild(el('span', 'watch-left', `Осталось ${left} из ${e.total}`));
+    // ярлык озвучки: SUB — субтитры, DUB — озвучка (студия — по наведению); в ней же откроется плеер
     const tr = e.translation;
+    let trSpoken = '';
     if (tr?.title) {
       const isSub = tr.type === 'sub' || /субтитр/i.test(tr.title);
-      // коротко: длинное «DUB · AniDUB» выталкивало строку серии на два ряда; студия — по наведению
-      const chip = el('span', 'tr-chip' + (isSub ? ' tr-chip--sub' : ''), isSub ? 'SUB' : 'DUB');
+      const chip = el('span', 'tr-chip', isSub ? 'SUB' : 'DUB');
       chip.title = isSub ? (/^субтитры$/i.test(tr.title) ? 'Субтитры' : `Субтитры: ${tr.title}`) : `Озвучка: ${tr.title}`;
-      metaRow.appendChild(chip);
+      sub.appendChild(chip);
+      trSpoken = `. ${isSub ? 'Субтитры' : 'Озвучка ' + tr.title}`; // скринридеру, а не только мыши
     }
-    info.appendChild(metaRow);
-    // озвучку слышит и скринридер, а не только мышь в подсказке
-    const trSpoken = e.translation?.title
-      ? `. ${e.translation.type === 'sub' ? 'Субтитры' : 'Озвучка ' + e.translation.title}`
-      : '';
-    a.setAttribute('aria-label', `${e.title}. ${line}${trSpoken}`);
-
-    // «смотреть ещё N серий»
-    const remaining = e.total && !finished ? e.total - e.episode : 0;
-    if (remaining > 0) {
-      info.appendChild(el('div', 'watch-left', `смотреть ещё ${remaining} ${plural(remaining, ['серию', 'серии', 'серий'])}`));
-    }
+    if (sub.childNodes.length) info.appendChild(sub);
+    a.setAttribute('aria-label', `${e.title}. ${line}${left > 0 ? `. Осталось ${left} из ${e.total}` : ''}${trSpoken}`);
 
     if (e.duration && !done) {
       const bar = el('div', 'watch-progress');
@@ -138,25 +140,33 @@ function render(list) {
     ]) {
       const target = shown + delta;
       const b = el('button', 'btn-step');
+      b.dataset.role = delta < 0 ? 'prev' : 'next';
       b.appendChild(atIcon(icon, 14));
       b.title = `Не та серия? Запомнить ${target}`;
       b.setAttribute('aria-label', `${label}: запомнить ${target} серию для «${e.title}»`);
       b.disabled = target < 1;
       b.addEventListener('click', async () => {
         await chrome.runtime.sendMessage({ type: 'manual', key: e.key, patch: { episode: target, time: 0, duration: 0 } });
-        load();
+        await load();
+        // правка обнуляет время серии — случайный клик не должен стирать «6:58» насовсем
+        showToast(`Запомнили ${target} серию`, 'Отменить', async () => {
+          await chrome.runtime.sendMessage({ type: 'restore', entry: e, replace: true });
+          load();
+        });
       });
       step.appendChild(b);
     }
 
     const del = el('button', 'btn-remove');
+    del.dataset.role = 'remove';
     del.appendChild(atIcon('x', 16));
     del.title = 'Убрать из списка';
     del.setAttribute('aria-label', `Убрать «${e.title}» из списка`);
     del.addEventListener('click', async (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      await chrome.runtime.sendMessage({ type: 'remove', key: e.key });
+      const r = await chrome.runtime.sendMessage({ type: 'remove', key: e.key }).catch(() => null);
+      if (!r?.ok) return showToast('Не получилось убрать — попробуйте ещё раз'); // не врём «убран» при сбое
       await load();
       // удаление обратимо: промах по крестику не стирает историю тайтла насовсем
       showToast(`«${e.title}» убран`, 'Вернуть', async () => {
@@ -174,6 +184,11 @@ function render(list) {
 }
 
 async function load() {
+  // перерисовка стирает список — запоминаем, где был фокус клавиатуры, чтобы вернуть его (WCAG 2.4.3)
+  const focused = document.activeElement;
+  const focusKey = focused?.closest?.('[data-key]')?.dataset.key;
+  const focusRole = focused?.dataset?.role;
+  const keys = [...document.querySelectorAll('#watchList [data-key]')].map((li) => li.dataset.key);
   let r = null;
   try {
     r = await chrome.runtime.sendMessage({ type: 'list' });
@@ -188,10 +203,35 @@ async function load() {
     return;
   }
   render(r.list || []);
+  if (focusKey) restoreFocus(focusKey, focusRole, keys.indexOf(focusKey));
 }
 
-// Тост r6tv: белая плашка, текст цвета фона, 14/700, радиус --r-btn; одно действие и автоскрытие
+// тот же элемент той же карточки; карточку удалили — соседняя на её месте (или предыдущая)
+function restoreFocus(key, role, oldIndex) {
+  const items = [...document.querySelectorAll('#watchList [data-key]')];
+  const li = items.find((x) => x.dataset.key === key) || items[Math.min(oldIndex, items.length - 1)];
+  if (!li) return document.getElementById('btnClear')?.focus();
+  const target = (role && li.querySelector(`[data-role="${role}"]:not(:disabled)`)) || li.querySelector('[data-role="open"]');
+  target?.focus();
+}
+
+// Тост r6tv: белая плашка, текст цвета фона, 14/700, радиус --r-btn; одно действие и автоскрытие.
+// 8 с и пауза, пока на нём курсор или фокус: «Вернуть» должны успеть нажать (WCAG 2.2.1).
+const TOAST_MS = 8000;
 let toastTimer = 0;
+function hideToast() {
+  document.getElementById('toast').classList.add('hidden');
+  document.body.classList.remove('has-toast');
+}
+function armToast() {
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, TOAST_MS);
+}
+{
+  const t = document.getElementById('toast');
+  for (const ev of ['mouseenter', 'focusin']) t.addEventListener(ev, () => clearTimeout(toastTimer));
+  for (const ev of ['mouseleave', 'focusout']) t.addEventListener(ev, armToast);
+}
 function showToast(text, actionLabel, onAction) {
   const t = document.getElementById('toast');
   t.innerHTML = '';
@@ -199,14 +239,14 @@ function showToast(text, actionLabel, onAction) {
   if (actionLabel) {
     const b = el('button', 'toast-action', actionLabel);
     b.addEventListener('click', () => {
-      t.classList.add('hidden');
+      hideToast();
       onAction();
     });
     t.appendChild(b);
   }
   t.classList.remove('hidden');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.add('hidden'), 6000);
+  document.body.classList.add('has-toast'); // список получает отступ снизу — тост не закрывает ‹ › последней карточки
+  armToast();
 }
 
 // знак расширения «Стопка серий» (тот же, что icons/*.png — scripts/icons.py); разметка — константа
@@ -219,12 +259,19 @@ document.getElementById('emptyIcon').appendChild(atIcon('tv', 40));
 const btnClear = document.getElementById('btnClear');
 btnClear.append(atIcon('trash', 14), document.createTextNode('Очистить историю'));
 
+// Очистка — как удаление одной записи: сразу и с «Вернуть», без системного confirm() поверх попапа
 btnClear.addEventListener('click', async () => {
-  if (confirm('Очистить всю историю просмотров?')) {
-    await chrome.runtime.sendMessage({ type: 'clear' });
+  const r = await chrome.runtime.sendMessage({ type: 'list' });
+  const before = r?.list || [];
+  const done = await chrome.runtime.sendMessage({ type: 'clear' }).catch(() => null);
+  if (!done?.ok) return showToast('Не получилось очистить — попробуйте ещё раз');
+  await load();
+  showToast('История очищена', 'Вернуть', async () => {
+    await chrome.runtime.sendMessage({ type: 'restoreAll', entries: before });
     load();
-  }
+  });
 });
+document.getElementById('btnRetry').addEventListener('click', () => load());
 
 load();
 initSiteBar();
@@ -251,6 +298,10 @@ async function initSiteBar() {
   const host = atHostKey(url.hostname);
   const { sites = [] } = await chrome.storage.local.get('sites');
   const tracked = atTrackedSite(url.hostname, sites);
+  // пустой список говорит, что делать именно здесь, а не общую инструкцию
+  document.getElementById('emptySub').textContent = tracked
+    ? 'Включите серию — она появится здесь'
+    : 'Нажмите «Отслеживать» и включите серию';
 
   let frames = [];
   if (!tracked) {
@@ -265,11 +316,11 @@ async function initSiteBar() {
   const bar = document.getElementById('siteBar');
   const btn = document.getElementById('btnSite');
   document.getElementById('siteHost').textContent = host;
-  document.getElementById('siteState').textContent = tracked ? 'Отслеживается' : 'Этот сайт';
-  btn.textContent = tracked ? 'Не отслеживать' : 'Отслеживать этот сайт';
+  document.getElementById('siteState').textContent = tracked ? 'Отслеживается' : 'Не отслеживается';
+  btn.textContent = tracked ? 'Не отслеживать' : 'Отслеживать';
   btn.classList.toggle('btn-site--primary', !tracked);
   btn.title = tracked
-    ? 'Расширение перестанет читать видео на этом сайте и вернёт доступ к нему. История останется'
+    ? 'Расширение перестанет видеть этот сайт и откажется от доступа к нему. История останется'
     : 'Chrome спросит доступ к этому сайту' + (frames.length ? ' и к окну его плеера' : '');
   bar.classList.remove('hidden');
 

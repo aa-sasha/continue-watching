@@ -5,7 +5,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 
@@ -15,8 +14,8 @@ function makeCloud({ quota = Infinity, quotaPerItem = Infinity } = {}) {
   return { data: {}, listeners: new Set(), quota, quotaPerItem, writes: 0 };
 }
 
-// dir — откуда брать background.js и shared.js: исходники или готовая сборка (dist/store)
-function boot({ build = 'personal', granted = () => true, dir = '..', cloud = makeCloud() } = {}) {
+// dir — откуда брать background.js и shared.js
+function boot({ dir = '..', cloud = makeCloud() } = {}) {
   const shared = require(`${dir}/shared.js`);
   const src = fs.readFileSync(new URL(`${dir}/background.js`, import.meta.url), 'utf8');
   const store = { local: {}, session: {}, sync: cloud.data };
@@ -54,7 +53,6 @@ function boot({ build = 'personal', granted = () => true, dir = '..', cloud = ma
   });
   const onInstalled = [];
   let handler;
-  const registered = { scripts: [], injected: [], removed: [] };
   const chrome = {
     storage: {
       local: area('local'),
@@ -69,22 +67,10 @@ function boot({ build = 'personal', granted = () => true, dir = '..', cloud = ma
       onMessage: { addListener: (f) => (handler = f) },
     },
     tabs: { sendMessage: async () => {}, onRemoved: { addListener() {} } },
-    permissions: {
-      contains: async ({ origins }) => origins.every(granted),
-      remove: async ({ origins }) => registered.removed.push(...origins),
-      onAdded: { addListener() {} },
-      onRemoved: { addListener() {} },
-    },
-    scripting: {
-      getRegisteredContentScripts: async () => registered.scripts,
-      unregisterContentScripts: async () => (registered.scripts = []),
-      registerContentScripts: async (list) => (registered.scripts = list),
-      executeScript: async (o) => registered.injected.push(o),
-    },
   };
-  // importScripts('build.js', 'shared.js') фона — подставляем сборку и функции shared.js в его область
+  // importScripts('shared.js') фона — подставляем функции shared.js в его область
   const names = Object.keys(shared);
-  new Function('chrome', 'importScripts', 'AT_BUILD', ...names, src)(chrome, () => {}, build, ...names.map((n) => shared[n]));
+  new Function('chrome', 'importScripts', ...names, src)(chrome, () => {}, ...names.map((n) => shared[n]));
   // sender.tab.url — адрес верхней страницы вкладки (Chrome отдаёт его при host_permissions)
   // без вкладки — сообщение из попапа (страница расширения), с вкладкой — из контент-скрипта
   const call = (msg, tabId, url) =>
@@ -98,7 +84,7 @@ function boot({ build = 'personal', granted = () => true, dir = '..', cloud = ma
     for (const f of onInstalled) await f();
     await idle();
   };
-  return { call, callFromPage, store, registered, install };
+  return { call, callFromPage, store, install };
 }
 
 // дождаться, пока события sync разойдутся и очередь фона их обработает
@@ -221,69 +207,6 @@ test('«Сменить озвучку» сбрасывает её у запис�
   const { entry } = await call({ type: 'forgetTranslation', key: 'newdeaf:/anime/H.html' }, 1);
   assert.equal(entry.translation, null);
   assert.equal(entry.episode, 2);
-});
-
-// ── сборка для магазина: сайты добавляет человек ──
-
-test('магазин: сайт добавляется только с выданным доступом, трекер регистрируется на его окна', async () => {
-  const { call, registered } = boot({ build: 'store' });
-  const r = await call({
-    type: 'trackSite',
-    host: 'www.example.com',
-    origins: ['https://www.example.com', 'https://player.cdn.net', 'javascript:alert(1)'],
-    tabId: 7,
-  });
-  assert.equal(r.ok, true);
-  const [script] = registered.scripts;
-  assert.deepEqual(script.matches, ['https://www.example.com/*', 'https://player.cdn.net/*']);
-  assert.equal(script.allFrames, true);
-  assert.deepEqual(script.js, ['build.js', 'shared.js', 'tracker.js']);
-  assert.equal(registered.injected[0].target.tabId, 7); // открытая вкладка начинает отслеживаться сразу
-
-  const denied = boot({ build: 'store', granted: () => false });
-  assert.equal((await denied.call({ type: 'trackSite', host: 'a.com', origins: ['https://a.com'] })).ok, false);
-  assert.equal(denied.registered.scripts.length, 0);
-});
-
-test('магазин: окно плеера получает запись только для добавленного сайта', async () => {
-  const { call } = boot({ build: 'store' });
-  const url = 'https://www.example.com/show/1';
-  await call({ type: 'trackSite', host: 'example.com', origins: ['https://www.example.com'] });
-  await call({ type: 'page', meta: { site: 'example.com', url, title: 'Шоу' } }, 1, url);
-  await call({ type: 'progress', season: 1, episode: 3, time: 120, duration: 1400 }, 1, url);
-  assert.equal((await call({ type: 'entry' }, 2, url)).entry?.episode, 3);
-  // сайт из личной сборки в магазинной не узнаётся
-  assert.equal((await call({ type: 'entry' }, 3, 'https://yummyanime.tv/100-blich-m2.html')).entry, null);
-});
-
-test('магазин: «Не отслеживать» убирает сайт, регистрацию и доступ, история остаётся', async () => {
-  const { call, registered } = boot({ build: 'store' });
-  const url = 'https://example.com/show/1';
-  await call({ type: 'trackSite', host: 'example.com', origins: ['https://example.com'] });
-  await call({ type: 'page', meta: { site: 'example.com', url, title: 'Шоу' } }, 1, url);
-  await call({ type: 'progress', season: 1, episode: 2, time: 60, duration: 1400 }, 1, url);
-  assert.equal((await call({ type: 'untrackSite', host: 'example.com' })).ok, true);
-  assert.equal(registered.scripts.length, 0);
-  assert.deepEqual(registered.removed, ['https://example.com/*']);
-  assert.equal((await call({ type: 'list' })).list.length, 1);
-});
-
-test('личная сборка не принимает добавление сайтов', async () => {
-  const { call } = boot();
-  assert.equal((await call({ type: 'trackSite', host: 'a.com', origins: ['https://a.com'] })).ok, false);
-});
-
-test('готовая сборка для магазина работает без вырезанного кода личной', async () => {
-  execFileSync(process.execPath, [new URL('../scripts/build.mjs', import.meta.url).pathname]);
-  const { call, registered } = boot({ build: 'store', dir: '../dist/store' });
-  const url = 'https://video.example.org/series/5';
-  assert.equal((await call({ type: 'trackSite', host: 'video.example.org', origins: ['https://video.example.org'], tabId: 1 })).ok, true);
-  await call({ type: 'page', meta: { site: 'video.example.org', url, title: 'Сериал' } }, 1, url);
-  await call({ type: 'progress', season: 2, episode: 4, time: 300, duration: 1400 }, 1, url);
-  assert.equal((await call({ type: 'entry' }, 2, url)).entry?.episode, 4);
-  await call({ type: 'manual', key: 'video.example.org:/series/5', patch: { episode: 5 } });
-  assert.equal((await call({ type: 'list' })).list[0].episode, 5);
-  assert.equal(registered.scripts[0].js.includes('tracker.js'), true);
 });
 
 // ── синхронизация между компьютерами одного профиля Chrome ──
@@ -475,10 +398,3 @@ test('sync: очистка большой истории доходит до д�
   assert.equal((await a.call({ type: 'list' })).list.length, 0);
 });
 
-test('sync: «Не отслеживать» не отзывает домен плеера, общий с другим сайтом', async () => {
-  const { call, registered } = boot({ build: 'store' });
-  await call({ type: 'trackSite', host: 'x.com', origins: ['https://x.com', 'https://cdn.player.net'] });
-  await call({ type: 'trackSite', host: 'y.com', origins: ['https://y.com', 'https://cdn.player.net'] });
-  await call({ type: 'untrackSite', host: 'x.com' });
-  assert.deepEqual(registered.removed, ['https://x.com/*']);
-});

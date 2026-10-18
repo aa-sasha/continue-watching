@@ -1,7 +1,7 @@
 // Общая логика попапа и плашки (shared.js).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { atStatus, atFmtTime, atSafeUrl, atSiteOf, atKodikSrc, atTrackedSite, atParseLabel, atPackWatched, atUnpackWatched, atPackEntry, atUnpackEntry, atMergeRemote } = require('../shared.js');
+const { atStatus, atFmtTime, atSafeUrl, atSiteOf, atKodikSrc, atPackWatched, atUnpackWatched, atPackEntry, atUnpackEntry, atMergeRemote } = require('../shared.js');
 
 test('atStatus: недосмотренная — та же серия, досмотренная — следующая, последняя — весь тайтл', () => {
   assert.deepEqual(atStatus({ season: 1, episode: 6, watched: {} }), { done: false, finished: false, next: 6 });
@@ -62,21 +62,6 @@ test('atKodikSrc: с id озвучки фиксирует её через only_t
   assert.equal(atKodikSrc(u.toString(), e), null);
   // путь и серия верные, но озвучка не зафиксирована — подменяем
   assert.notEqual(atKodikSrc(`https://kodikplayer.com${subs.path}?season=1&episode=9`, e), null);
-});
-
-test('atTrackedSite: www и регистр не важны, чужой хост — null', () => {
-  const sites = [{ host: 'example.com', origins: ['https://www.example.com'] }];
-  assert.equal(atTrackedSite('WWW.Example.com', sites)?.host, 'example.com');
-  assert.equal(atTrackedSite('example.com.evil.net', sites), null);
-  assert.equal(atTrackedSite('example.com', undefined), null);
-});
-
-test('atParseLabel: русские и английские подписи серии и сезона', () => {
-  assert.equal(atParseLabel('6 серия', 'episode'), 6);
-  assert.equal(atParseLabel('Episode 12', 'episode'), 12);
-  assert.equal(atParseLabel('Season 2', 'season'), 2);
-  assert.equal(atParseLabel('2 сезон', 'episode'), null);
-  assert.equal(atParseLabel('Серия 99999', 'episode'), null);
 });
 
 test('atPackWatched: досмотренное диапазонами и обратно без потерь', () => {

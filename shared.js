@@ -26,7 +26,6 @@ function atFmtTime(s) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 
-// @personal-start Kodik: озвучка и серия адресом плеера
 /**
  * Адрес плеера Kodik «наша озвучка + нужная серия» или null, если менять нечего.
  * У каждой озвучки Kodik свой адрес /serial/{media-id}/{media-hash}/720p, и он принимает
@@ -65,10 +64,8 @@ function atKodikSrc(src, entry) {
   else u.searchParams.delete('only_translations');
   return u.toString();
 }
-// @personal-end
 
 
-// @personal-start список сайтов личной сборки
 // Сайты, которые отслеживаем. Один список на фон и контент-скрипт: раньше он жил копией.
 const AT_SITES = [
   { id: 'newdeaf', re: /(^|\.)newdeaf\./i },
@@ -81,40 +78,7 @@ const AT_SITES = [
 function atSiteOf(hostname) {
   return AT_SITES.find((s) => s.re.test(hostname || ''))?.id || null;
 }
-// @personal-end
 
-
-// ── универсальный трекер (сборка для магазина): сайты добавляет сам человек ──
-
-/** Хост без www: www.example.com и example.com — один сайт. */
-// eslint-disable-next-line no-unused-vars
-function atHostKey(hostname) {
-  return String(hostname || '')
-    .toLowerCase()
-    .replace(/^www\./, '');
-}
-
-/**
- * Отслеживаемый сайт для хоста верхней страницы или null.
- * @param {string} hostname
- * @param {{host: string, origins: string[]}[]} sites — chrome.storage.local.sites
- */
-// eslint-disable-next-line no-unused-vars
-function atTrackedSite(hostname, sites) {
-  const host = atHostKey(hostname);
-  return (sites || []).find((s) => s.host === host) || null;
-}
-
-/** «6 серия», «Серия 6», «Episode 6», «1 сезон», «Season 1» → число или null. */
-// eslint-disable-next-line no-unused-vars
-function atParseLabel(text, kind) {
-  const t = (text || '').trim().toLowerCase();
-  if (!t || t.length > 40) return null;
-  const words = kind === 'episode' ? '(?:серия|серии|эпизод|episode|ep\\.?)' : '(?:сезон|season)';
-  const m = t.match(new RegExp(`^(\\d+)\\s*${words}$`)) || t.match(new RegExp(`^${words}\\s*(\\d+)$`));
-  const n = m ? parseInt(m[1], 10) : NaN;
-  return n >= 1 && n <= 2000 ? n : null;
-}
 
 // ── синхронизация между компьютерами (chrome.storage.sync) ──
 // У sync жёсткие лимиты: 8 КБ на запись и ~100 КБ на всё. Поэтому в синхронизацию идёт сжатая
@@ -241,14 +205,9 @@ if (typeof module !== 'undefined') module.exports = {
     atStatus,
     atFmtTime,
     atSafeUrl,
-    // @personal-start
     atSiteOf,
     atKodikSrc,
     AT_SITES,
-    // @personal-end
-    atHostKey,
-    atTrackedSite,
-    atParseLabel,
     atPackWatched,
     atUnpackWatched,
     atPackEntry,

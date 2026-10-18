@@ -38,7 +38,9 @@
     if (site) start(site);
   });
 
+  let currentSite = null;
   function start(site) {
+    currentSite = site;
     if (isTop) initPage(site);
     initFrame();
   }
@@ -116,6 +118,9 @@
     const candidates = [];
     for (const el of document.querySelectorAll('div, span, button, a, li, p, h1, h2, h3')) {
       if (el.children.length > 2) continue;
+      // сначала дешёвая длина текста: innerText у обёртки вроде #app > div считает раскладку всей
+      // страницы, а подпись серии — пара слов (ревью 18.10)
+      if ((el.textContent || '').length > 60) continue;
       const n = atParseLabel(el.innerText, kind);
       if (n && visible(el)) candidates.push({ el, n });
     }
@@ -172,9 +177,22 @@
     return changed;
   }
 
+  let pollTimer = 0;
+  const stopFrame = () => clearInterval(pollTimer);
+  let lastHref = location.href;
+
   function poll() {
+    // расширение перезагрузили — этот экземпляр скрипта осиротел: перестаём опрашивать страницу
+    if (!chrome.runtime?.id) return stopFrame();
+    // Сайт сменил страницу без перезагрузки (pushState) — сообщаем фону новую, иначе прогресс шёл бы
+    // в запись прошлой страницы (ревью 18.10)
+    if (isTop && location.href !== lastHref) {
+      lastHref = location.href;
+      send({ type: 'page', meta: pageMeta(currentSite) });
+    }
     const v = mainVideo();
     if (!v) return;
+    if (v.paused) return; // на паузе время ловит событие pause, смену серии — play
     const changed = setEpisode(readFromDom('episode'), readFromDom('season'), v);
     if (isFinite(v.duration) && v.duration > 0) state.duration = v.duration;
     if (v.currentTime > 0) state.time = v.currentTime;
@@ -228,6 +246,6 @@
       },
       true
     );
-    setInterval(poll, 2000);
+    pollTimer = setInterval(poll, 2000);
   }
 })();

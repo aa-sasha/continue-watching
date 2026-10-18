@@ -161,6 +161,7 @@
         if (!tab) return;
         const label = tabLabel(tab);
         if (label && !isTrailer(label)) send({ type: 'player', label });
+        setTimeout(() => renderBanner(bannerEntry), 50);
       },
       true
     );
@@ -194,7 +195,7 @@
     const season = entry.season ? `${entry.season} сезон, ` : '';
     if (finished) return `Досмотрено полностью: ${season}${entry.episode} из ${entry.total} серий`;
     if (done) return `Дальше: ${season}${entry.episode + 1} серия (${entry.episode} досмотрена)`;
-    const from = entry.time > 30 ? ` с ${atFmtTime(entry.time)} — нажмите «старт», перемотаем сами` : '';
+    const from = entry.time > 30 ? ` с ${atFmtTime(entry.time)}` : '';
     return `Продолжить: ${season}${entry.episode} серия${from}`;
   }
 
@@ -211,8 +212,26 @@
     font: 'Roboto,"Roboto Fallback",-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif',
   };
 
+  // вторичная кнопка r6tv .btn-2 инлайном (страница чужая — классы сайта не протекают из-за all:initial)
+  function styleSecondary(b, text) {
+    b.style.cssText =
+      'all:initial;cursor:pointer;flex:none;box-sizing:border-box;height:32px;border-radius:8px;display:inline-flex;' +
+      'align-items:center;justify-content:center;' +
+      (text ? `padding:0 12px;font:500 12px/32px ${R6.font};` : 'width:32px;min-width:32px;') +
+      `background:${R6.control};color:${R6.text}`;
+    b.onmouseenter = () => (b.style.background = R6.controlHover);
+    b.onmouseleave = () => (b.style.background = R6.control);
+    b.onfocus = () => {
+      b.style.outline = `2px solid ${R6.focus}`;
+      b.style.outlineOffset = '2px';
+    };
+    b.onblur = () => (b.style.outline = 'none');
+  }
+
   // Плашка над плеером: где остановился + ручная правка серии, если плеер не дал её прочитать.
+  let bannerEntry = null;
   function renderBanner(entry) {
+    bannerEntry = entry || null;
     let el = document.getElementById('at-banner');
     if (!entry || !entry.episode) {
       el?.remove();
@@ -240,25 +259,38 @@
     text.style.cssText = `all:initial;color:${R6.text};font:700 14px/1.5 ${R6.font};flex:1;min-width:200px`;
     text.textContent = bannerText(entry, status);
     el.appendChild(text);
+    const tipLine = (txt) => {
+      const tip = document.createElement('span');
+      tip.textContent = txt;
+      tip.style.cssText = `all:initial;flex-basis:100%;order:9;color:${R6.muted};font:500 12px/1.5 ${R6.font}`;
+      el.appendChild(tip);
+    };
+    if (!status.done && entry.time > 30) tipLine('Нажмите «старт» в плеере — перемотаем сами');
+    // Открыт другой плеер (у YummyAnime по умолчанию — Alloha): серию в нём расширение ставить не умеет.
+    // Kodik умеет — точно, с озвучкой и перемоткой; предлагаем переключиться одним нажатием.
+    const kodikTab = site.id === 'yummyanime' && [...document.querySelectorAll(PLAYER_TABS)].find((t) => /^kodik$/i.test(tabLabel(t)));
+    if (kodikTab && !kodikTab.classList.contains('is-active') && !status.finished) {
+      const go = document.createElement('button');
+      go.textContent = `Открыть в Kodik на ${status.next} серии`;
+      go.title = 'В этом плеере расширение не может поставить серию — в Kodik откроет нужную, в вашей озвучке';
+      styleSecondary(go, true);
+      go.onclick = () => {
+        kodikTab.click();
+        send({ type: 'player', label: tabLabel(kodikTab) }); // выбор человека: в следующий раз сразу Kodik
+        setTimeout(() => renderBanner(bannerEntry), 50);
+      };
+      el.appendChild(go);
+    }
     // Озвучка зафиксирована — в Kodik нет её списка; сменить можно здесь
     if (site.id === 'yummyanime' && entry.translation?.title) {
       const tr = document.createElement('button');
       const kind = entry.translation.type === 'sub' ? 'Субтитры' : `Озвучка: ${entry.translation.title}`;
       tr.textContent = `${kind} · сменить`;
       tr.title = 'Откроем список озвучек в Kodik — выбранную запомним';
-      tr.style.cssText =
-        'all:initial;cursor:pointer;flex:none;box-sizing:border-box;height:32px;padding:0 12px;border-radius:8px;' +
-        `background:${R6.control};color:${R6.text};font:500 12px/32px ${R6.font}`;
-      tr.onmouseenter = () => (tr.style.background = R6.controlHover);
-      tr.onmouseleave = () => (tr.style.background = R6.control);
-      tr.onfocus = () => {
-        tr.style.outline = `2px solid ${R6.focus}`;
-        tr.style.outlineOffset = '2px';
-      };
-      tr.onblur = () => (tr.style.outline = 'none');
+      styleSecondary(tr, true);
       tr.onclick = async () => {
         const r = await send({ type: 'forgetTranslation', key: entry.key });
-        renderBanner(r?.entry);
+        renderBanner(r?.entry || entry); // фон не ответил — плашка остаётся, а не пропадает
       };
       el.appendChild(tr);
     }
@@ -274,34 +306,23 @@
     hint.textContent = 'Не та серия?';
     hint.style.cssText = `all:initial;color:${R6.muted};font:500 12px/1.5 ${R6.font}`;
     el.appendChild(hint);
-    const btn = (icon, title, delta) => {
+    // Шаг — от серии на плашке (досмотренная → уже следующая): иначе «›» на «Дальше 16» ставил 16 и
+    // ничего не менял. Номер — в подписи: «‹ ›» рядом с «Продолжить» читались как листание плеера.
+    const btn = (icon, delta) => {
+      const target = Math.max(1, status.next + delta);
       const b = document.createElement('button');
       b.appendChild(atIcon(icon, 18));
-      b.title = title;
-      b.setAttribute('aria-label', title);
-      b.style.cssText =
-        'all:initial;cursor:pointer;flex:none;box-sizing:border-box;width:32px;min-width:32px;height:32px;display:inline-flex;align-items:center;' +
-        // вторичная кнопка .btn-2: --surface-control, наведение --surface-control-hover, радиус --r-btn 8
-        `justify-content:center;border-radius:8px;background:${R6.control};color:${R6.text}`;
-      b.onmouseenter = () => (b.style.background = R6.controlHover);
-      b.onmouseleave = () => (b.style.background = R6.control);
-      b.onfocus = () => {
-        b.style.outline = `2px solid ${R6.focus}`;
-        b.style.outlineOffset = '2px';
-      };
-      b.onblur = () => (b.style.outline = 'none');
+      b.title = `Не та серия? Запомнить ${target}`;
+      b.setAttribute('aria-label', `Не та серия? Запомнить ${target} серию`);
+      styleSecondary(b, false);
       b.onclick = async () => {
-        const r = await send({
-          type: 'manual',
-          key: entry.key,
-          patch: { episode: Math.max(1, entry.episode + delta), time: 0, duration: 0 },
-        });
-        renderBanner(r?.entry);
+        const r = await send({ type: 'manual', key: entry.key, patch: { episode: target, time: 0, duration: 0 } });
+        renderBanner(r?.entry || entry);
       };
       return b;
     };
-    el.appendChild(btn('chevronLeft', 'Запомнить предыдущую серию', -1));
-    el.appendChild(btn('chevronRight', 'Запомнить следующую серию', +1));
+    el.appendChild(btn('chevronLeft', -1));
+    el.appendChild(btn('chevronRight', +1));
   }
 
   // ═════════════════════ окна плеера (любой фрейм) ═════════════════════
@@ -330,7 +351,11 @@
     if (![...document.querySelectorAll('iframe')].some((f) => f.contentWindow === e.source)) return;
     if (d.key === 'kodik_player_current_episode' && d.value) {
       const ep = num(d.value.episode);
-      if (ep && ep !== state.episode) state.time = 0;
+      if (ep && ep !== state.episode) {
+        // новая серия — время и длительность прошлой к ней не относятся (как setEpisode в опросе)
+        state.time = 0;
+        state.duration = 0;
+      }
       state.season = num(d.value.season) || state.season;
       state.episode = ep || state.episode;
       report(true); // запишется, только если видео уже шло
@@ -460,6 +485,9 @@
     const candidates = [];
     for (const el of document.querySelectorAll('div, span, button, a, li, p')) {
       if (el.children.length > 2) continue;
+      // сначала дешёвая длина текста: innerText у обёртки вроде #app > div считает раскладку всей
+      // страницы, а подпись серии — пара слов (ревью 18.10)
+      if ((el.textContent || '').length > 60) continue;
       const n = parseLabel(el.innerText, kind);
       if (n && visible(el)) candidates.push({ el, n });
     }
@@ -518,10 +546,21 @@
     return changed;
   }
 
+  let pollTimer = 0;
+  let kodikObserver = null;
+  function stopFrame() {
+    clearInterval(pollTimer);
+    kodikObserver?.disconnect();
+  }
+
   function poll() {
+    // расширение перезагрузили — этот экземпляр скрипта осиротел: перестаём опрашивать страницу
+    if (!chrome.runtime?.id) return stopFrame();
     syncTranslation(); // в окне Kodik список озвучек есть и до появления <video>
     const v = mainVideo();
     if (!v) return; // в этом фрейме нет плеера
+    // на паузе читать подписи незачем: время ловит событие pause, смену серии — play (ревью 18.10)
+    if (v.paused) return;
     const changed = setEpisode(readFromDom('episode'), readFromDom('season'), v);
     if (isFinite(v.duration) && v.duration > 0) state.duration = v.duration;
     if (v.currentTime > 0) state.time = v.currentTime;
@@ -553,7 +592,8 @@
     // окна Kodik появляются и пересоздаются когда угодно — следим за ними всё время жизни фрейма
     // (обёртка крошечная, наблюдатель дешёвый)
     scanKodik();
-    new MutationObserver(scanKodik).observe(document.documentElement, { childList: true, subtree: true });
+    kodikObserver = new MutationObserver(scanKodik);
+    kodikObserver.observe(document.documentElement, { childList: true, subtree: true });
     chrome.runtime.onMessage.addListener((m) => {
       if (m.type !== 'updated') return;
       resume = m.entry || resume;
@@ -568,7 +608,7 @@
       },
       true
     );
-    setInterval(poll, 2000);
+    pollTimer = setInterval(poll, 2000);
     // остановили — фиксируем точный момент, не дожидаясь опроса
     document.addEventListener(
       'pause',

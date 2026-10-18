@@ -13,6 +13,11 @@ const STORE = AT_BUILD === 'store';
 // key = site + путь без домена: у некоторых сайтов меняется домен (зеркала), а путь — нет.
 
 const MAX_ENTRIES = 200;
+
+// Все обращения к истории — строго по очереди. Иначе два почти одновременных сообщения (пауза +
+// опрос, два плеера, две вкладки) читают одну версию, и вторая запись затирает первую.
+let queue = Promise.resolve();
+const serial = (fn) => (queue = queue.then(fn, fn));
 // tabId → мета страницы из верхнего фрейма. В storage.session, а не в переменной: service worker
 // MV3 засыпает через ~30 с простоя, и прогресс из плеера приходил бы «ничьим».
 const setPage = (tabId, meta) => chrome.storage.session.set({ [`tab_${tabId}`]: meta });
@@ -115,7 +120,10 @@ chrome.runtime.onInstalled.addListener(() => serial(syncRegistration));
 
 // @personal-start перенос истории YummyAni Tracker 1.x
 // Перенос истории из YummyAni Tracker 1.x (chrome.storage.sync: watchIndex + watch_{slug})
-chrome.runtime.onInstalled.addListener(async () => {
+// В общей очереди serial: иначе сверка с sync (тоже на onInstalled) читала историю до переноса и
+// записывала после — перенесённое пропадало, а флаг migrated уже не давал повторить (ревью 18.10).
+chrome.runtime.onInstalled.addListener(() => serial(migrateFromV1));
+async function migrateFromV1() {
   const { migrated } = await chrome.storage.local.get('migrated');
   if (migrated) return;
   const { watchIndex = [] } = await chrome.storage.sync.get('watchIndex');
@@ -143,25 +151,29 @@ chrome.runtime.onInstalled.addListener(async () => {
     await saveHistory(h);
   }
   await chrome.storage.local.set({ migrated: true });
-});
+}
 // @personal-end
 
-// Все обращения к истории — строго по очереди. Иначе два почти одновременных сообщения (пауза +
-// опрос, два плеера, две вкладки) читают одну версию, и вторая запись затирает первую.
-let queue = Promise.resolve();
-const serial = (fn) => (queue = queue.then(fn, fn));
 
 // ── синхронизация между компьютерами одного профиля Chrome (chrome.storage.sync) ──
 // Главная история — локальная (пишется раз в ~10 с). В sync уходит сжатая суть каждой записи
 // (`e:<ключ>`, shared.js atPackEntry). Лимиты sync — ~100 КБ всего, 8 КБ на запись, 120 записей
 // в минуту, — поэтому пишем только смену серии/паузу/досмотр (force) и не чаще раза в минуту
 // во время просмотра. Конфликт двух компьютеров решает свежесть (updatedAt).
-// Удаление — отдельным списком `deleted` {ключ: когда}: просто пропавшая из sync запись могла быть
-// вытеснена по лимиту, и стирать её у другого компьютера нельзя.
+// Удаление — отметкой `d:<ключ>` = когда: просто пропавшая из sync запись могла быть вытеснена по
+// лимиту, и стирать её у другого компьютера нельзя. Раньше отметки жили одним объектом `deleted`, и
+// на ~120 тайтлах он не влезал в 8 КБ: «Очистить» молча не доходило до второго компьютера, и тот
+// возвращал всю историю обратно (ревью 18.10). Старый `deleted` читается и убирается при сверке.
 const SYNC_PREFIX = 'e:';
+const DEL_PREFIX = 'd:';
 const SYNC_EVERY = 60000;
 const TOMBSTONES_MAX = 200;
 const lastPush = new Map(); // ключ → { at, mark }
+// Ошибки sync не глотаем молча: их видно в консоли фона (chrome://extensions → «service worker»)
+const warn = (what, err) => console.warn('[sync]', what, String(err?.message || err));
+// «нет места» — только общий лимит QUOTA_BYTES. Лимит частоты (MAX_WRITE_OPERATIONS_*) — не повод
+// вытеснять записи: места хватает, просто надо подождать (ревью 18.10).
+const isNoSpace = (err) => /QUOTA_BYTES(?!_PER_ITEM)/.test(String(err?.message || err));
 
 const syncMark = (e) => `${e.season}:${e.episode}:${Object.keys(e.watched || {}).length}:${e.translation?.path || ''}`;
 
@@ -171,16 +183,23 @@ async function pushSync(e, force) {
   const prev = lastPush.get(e.key);
   if (!force && prev && prev.mark === mark && Date.now() - prev.at < SYNC_EVERY) return;
   lastPush.set(e.key, { at: Date.now(), mark });
-  const item = { [SYNC_PREFIX + e.key]: atPackEntry(e) };
+  if (!(await setSync({ [SYNC_PREFIX + e.key]: atPackEntry(e) }, e.key))) lastPush.delete(e.key); // повторим при следующем прогрессе
+}
+
+// Запись в sync; нет места — вытесняем самую старую запись (у других компьютеров она остаётся).
+async function setSync(items, keep) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      await chrome.storage.sync.set(item);
-      return;
+      await chrome.storage.sync.set(items);
+      return true;
     } catch (err) {
-      // места нет — вытесняем самую старую запись из sync (у других компьютеров она остаётся)
-      if (!/quota/i.test(String(err?.message || err)) || !(await evictOldestSync(e.key))) return;
+      if (!isNoSpace(err) || !(await evictOldestSync(keep))) {
+        warn('запись не прошла', err);
+        return false;
+      }
     }
   }
+  return false;
 }
 
 async function evictOldestSync(keep) {
@@ -195,16 +214,33 @@ async function evictOldestSync(keep) {
 }
 
 async function deleteSync(keys) {
-  const { deleted = {} } = await chrome.storage.sync.get('deleted');
+  if (!keys.length) return;
   const now = Date.now();
-  for (const k of keys) {
-    deleted[k] = now;
-    lastPush.delete(k);
-  }
-  // хранить вечно незачем: оставляем самые свежие
-  const kept = Object.entries(deleted).sort((a, b) => b[1] - a[1]).slice(0, TOMBSTONES_MAX);
-  await chrome.storage.sync.set({ deleted: Object.fromEntries(kept) }).catch(() => {});
-  await chrome.storage.sync.remove(keys.map((k) => SYNC_PREFIX + k)).catch(() => {});
+  for (const k of keys) lastPush.delete(k);
+  // одна запись set на все отметки: лимит частоты считает вызовы, а не ключи
+  await setSync(Object.fromEntries(keys.map((k) => [DEL_PREFIX + k, now])));
+  await chrome.storage.sync.remove(keys.map((k) => SYNC_PREFIX + k)).catch((err) => warn('удаление', err));
+  await pruneTombstones();
+}
+
+// хранить отметки вечно незачем: оставляем самые свежие
+async function pruneTombstones() {
+  const all = await chrome.storage.sync.get(null);
+  const marks = Object.entries(all).filter(([k]) => k.startsWith(DEL_PREFIX));
+  if (marks.length <= TOMBSTONES_MAX) return;
+  const old = marks.sort((a, b) => b[1] - a[1]).slice(TOMBSTONES_MAX).map(([k]) => k);
+  await chrome.storage.sync.remove(old).catch((err) => warn('чистка отметок', err));
+}
+
+// отметки удаления из содержимого sync: новые `d:<ключ>` и старый общий объект `deleted`
+function tombstonesOf(all) {
+  const out = { ...(all.deleted || {}) };
+  for (const [k, v] of Object.entries(all)) if (k.startsWith(DEL_PREFIX)) out[k.slice(DEL_PREFIX.length)] = v;
+  return out;
+}
+
+async function clearTombstones(keys) {
+  await chrome.storage.sync.remove(keys.map((k) => DEL_PREFIX + k)).catch((err) => warn('снятие отметок', err));
 }
 
 // пришло с другого компьютера (или полная сверка при запуске): более свежее — в локальную историю
@@ -235,21 +271,37 @@ async function reconcileSync() {
   const remote = Object.entries(all)
     .filter(([k]) => k.startsWith(SYNC_PREFIX))
     .map(([, v]) => v);
-  await applyRemote(remote, all.deleted);
+  await applyRemote(remote, tombstonesOf(all));
+  // старый общий объект отметок (до 18.10) — переносим в `d:<ключ>` и убираем
+  if (all.deleted) {
+    await setSync(Object.fromEntries(Object.entries(all.deleted).map(([k, v]) => [DEL_PREFIX + k, v])));
+    await chrome.storage.sync.remove('deleted').catch((err) => warn('старые отметки', err));
+  }
   const h = await getHistory();
   const ups = Object.fromEntries(remote.map((p) => [p?.k, p?.up || 0]));
   const mine = Object.values(h)
     .filter((e) => (ups[e.key] ?? -1) < (e.updatedAt || 0))
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); // свежие первыми: им место в sync важнее
-  for (const e of mine) await pushSync(e, true);
+  // Пачками по 20 одним set: лимит частоты (120 в минуту) считает вызовы. По одной на 200 записях
+  // упирались в него, и сверка обрывалась на середине (ревью 18.10).
+  for (let i = 0; i < mine.length; i += 20) {
+    const batch = mine.slice(i, i + 20);
+    const items = Object.fromEntries(batch.map((e) => [SYNC_PREFIX + e.key, atPackEntry(e)]));
+    if (await setSync(items)) batch.forEach((e) => lastPush.set(e.key, { at: Date.now(), mark: syncMark(e) }));
+    else for (const e of batch) await pushSync(e, true); // не влезла пачка — по одной, с вытеснением
+  }
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
   const entries = [];
-  for (const [k, c] of Object.entries(changes)) if (k.startsWith(SYNC_PREFIX) && c.newValue) entries.push(c.newValue);
-  const deleted = changes.deleted?.newValue;
-  if (entries.length || deleted) serial(() => applyRemote(entries, deleted));
+  const deleted = {};
+  for (const [k, c] of Object.entries(changes)) {
+    if (k.startsWith(SYNC_PREFIX) && c.newValue) entries.push(c.newValue);
+    if (k.startsWith(DEL_PREFIX) && typeof c.newValue === 'number') deleted[k.slice(DEL_PREFIX.length)] = c.newValue;
+  }
+  Object.assign(deleted, changes.deleted?.newValue || {}); // компьютер со старой версией
+  if (entries.length || Object.keys(deleted).length) serial(() => applyRemote(entries, deleted));
 });
 chrome.runtime.onInstalled.addListener(() => serial(reconcileSync));
 chrome.runtime.onStartup?.addListener(() => serial(reconcileSync));
@@ -264,8 +316,37 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   return true;
 });
 
+const restorable = (e) => typeof e?.key === 'string' && !!e.key && /^https?:[/][/]/.test(e.url || '');
+
+async function restoreEntries(entries, replace) {
+  const valid = entries.filter(restorable);
+  if (!valid.length) return false;
+  const h = await getHistory();
+  for (const e of valid) {
+    // отмена правки — свежее изменение: иначе другой компьютер оставил бы правленую версию как более новую
+    if (replace) h[e.key] = { ...e, updatedAt: Date.now() };
+    else h[e.key] ??= e;
+  }
+  await saveHistory(h);
+  // «Вернуть» отменяет и удаление на других компьютерах: снимаем отметки, отдаём записи заново
+  await clearTombstones(valid.map((e) => e.key));
+  const { deleted } = await chrome.storage.sync.get('deleted'); // старый общий объект, если ещё есть
+  if (deleted && valid.some((e) => e.key in deleted)) {
+    for (const e of valid) delete deleted[e.key];
+    await setSync({ deleted });
+  }
+  for (const e of valid) await pushSync(h[e.key], true);
+  return true;
+}
+
+// Команды, которые шлёт только попап. Контент-скрипт стоит во всех фреймах любых сайтов, и
+// скомпрометированная страница не должна чистить историю или подкладывать записи (ревью 18.10).
+const POPUP_ONLY = new Set(['list', 'remove', 'restore', 'restoreAll', 'clear', 'trackSite', 'untrackSite']);
+const fromExtensionPage = (sender) => !sender.tab && (sender.url || '').startsWith(chrome.runtime.getURL(''));
+
 async function handle(msg, sender) {
   const tabId = sender.tab?.id;
+  if (POPUP_ONLY.has(msg?.type) && !fromExtensionPage(sender)) return null;
 
   if (msg.type === 'page') {
     await setPage(tabId, msg.meta);
@@ -288,12 +369,20 @@ async function handle(msg, sender) {
   if (msg.type === 'progress') {
     const meta = await getPage(tabId);
     if (!meta) return null; // плеер на странице, которую верхний скрипт не признал тайтлом
-    const h = await getHistory();
     const key = keyOf(meta.site, meta.url);
+    // Мета вкладки устаревает: переход внутри сайта без перезагрузки или страница «не тайтл» после
+    // тайтла — и прогресс уходил в чужую запись. Сверяем с настоящим адресом вкладки (ревью 18.10).
+    if (sender.tab?.url && key !== keyOf(meta.site, sender.tab.url)) return null;
+    const h = await getHistory();
     const prev = h[key] || { watched: {} };
     const season = msg.season || prev.season || meta.pageSeason || null;
     const watched = { ...prev.watched };
-    if (msg.duration > 0 && msg.time / msg.duration >= 0.9) watched[`${season || 0}:${msg.episode}`] = true;
+    // короче 2 минут — не серия (реклама в том же <video>), досмотром не считаем
+    if (msg.duration >= 120 && msg.time / msg.duration >= 0.9) watched[`${season || 0}:${msg.episode}`] = true;
+    // Плеер шлёт время с первой секунды — раньше, чем успевает перемотка к месту остановки. Без этого
+    // 10:40 той же серии затиралось на 0:01, и не прошедшая перемотка теряла место навсегда (ревью 18.10).
+    const sameEp = prev.episode === msg.episode && (prev.season || null) === (season || null);
+    const time = sameEp && prev.time > 30 && msg.time < 10 ? prev.time : msg.time;
     h[key] = {
       ...prev,
       key,
@@ -309,7 +398,7 @@ async function handle(msg, sender) {
       translation: (msg.chosen && msg.translation) || prev.translation || meta.translation || msg.translation || null,
       season,
       episode: msg.episode,
-      time: msg.time,
+      time,
       duration: msg.duration || prev.duration || 0,
       watched,
       updatedAt: Date.now(),
@@ -403,10 +492,14 @@ async function handle(msg, sender) {
     const sites = await getSites();
     const site = sites.find((s) => s.host === host);
     if (!site) return { ok: false };
-    await chrome.storage.local.set({ sites: sites.filter((s) => s !== site) });
+    const rest = sites.filter((s) => s !== site);
+    await chrome.storage.local.set({ sites: rest });
+    // доступ возвращаем Chrome — кроме доменов, которые нужны другим отслеживаемым сайтам (общий
+    // CDN плеера): иначе у них молча переставало читаться видео (ревью 18.10). История остаётся.
+    const still = new Set(rest.flatMap((s) => s.origins));
+    const drop = site.origins.filter((o) => !still.has(o));
+    if (drop.length) await chrome.permissions.remove({ origins: drop.map(pattern) }).catch((err) => warn('отзыв доступа', err));
     await syncRegistration();
-    // доступ возвращаем Chrome; история просмотров остаётся
-    await chrome.permissions.remove({ origins: site.origins.map(pattern) }).catch(() => {});
     return { ok: true };
   }
 
@@ -437,21 +530,17 @@ async function handle(msg, sender) {
     return { list: Object.values(h).sort((a, b) => b.updatedAt - a.updatedAt) };
   }
 
-  // «Вернуть» после удаления: запись приходит из попапа, кладём её обратно под её же ключом
+  // «Вернуть» после удаления (replace: false — только если записи нет) и «Отменить» после правки серии
+  // (replace: true — вернуть запись как была). Запись приходит из попапа — проверяем ключ и адрес.
   if (msg.type === 'restore') {
-    const e = msg.entry;
-    if (!e?.key || typeof e.key !== 'string' || !/^https?:[/][/]/.test(e.url || '')) return { ok: false };
-    const h = await getHistory();
-    h[e.key] ??= e;
-    await saveHistory(h);
-    // «Вернуть» отменяет и удаление на других компьютерах: снимаем отметку, отдаём запись заново
-    const { deleted = {} } = await chrome.storage.sync.get('deleted');
-    if (e.key in deleted) {
-      delete deleted[e.key];
-      await chrome.storage.sync.set({ deleted }).catch(() => {});
-    }
-    await pushSync(h[e.key], true);
-    return { ok: true };
+    const ok = await restoreEntries([msg.entry], !!msg.replace);
+    return { ok };
+  }
+
+  // «Вернуть» после «Очистить историю»
+  if (msg.type === 'restoreAll') {
+    const ok = await restoreEntries(Array.isArray(msg.entries) ? msg.entries.slice(0, MAX_ENTRIES) : [], false);
+    return { ok };
   }
 
   if (msg.type === 'remove') {

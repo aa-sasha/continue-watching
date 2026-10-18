@@ -35,7 +35,10 @@
 
 body {
   width: 360px;
-  max-height: 580px;
+  /* колонка: шапка и низ на месте, прокручивается только список — раньше низ обрезался overflow:hidden */
+  max-height: 600px;
+  display: flex;
+  flex-direction: column;
   background: var(--surface-page);
   color: var(--text);
   /* Roboto — шрифт r6tv; без сети и без установленного Roboto — системный гротеск */
@@ -43,7 +46,7 @@ body {
   overflow: hidden;
 }
 
-.container { display: flex; flex-direction: column; gap: var(--gap); padding: var(--gap); }
+.container { display: flex; flex-direction: column; gap: var(--gap); padding: var(--gap); flex: 1; min-height: 0; }
 .hidden { display: none !important; }
 
 /* ── шапка: ячейка с заголовком ── */
@@ -71,7 +74,7 @@ body {
 /* ── список: каждая запись — ячейка bento ── */
 .watch-list {
   list-style: none; display: flex; flex-direction: column; gap: var(--gap);
-  max-height: 470px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--surface-selected) transparent;
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--surface-selected) transparent;
 }
 .watch-item { position: relative; }
 .watch-link {
@@ -99,7 +102,10 @@ body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .watch-meta { font-size: var(--fs-min); color: var(--muted); font-variant-numeric: tabular-nums; }
-.watch-left { font-size: var(--fs-min); color: var(--dim); }
+/* --muted, а не --dim: на карточке при наведении --dim давал 3.78:1 — ниже AA */
+.watch-left { font-size: var(--fs-min); color: var(--muted); }
+.watch-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.watch-sub { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 
 /* прогресс серии: дорожка — «выбранное», заполнение — белое (данные) */
 .watch-progress { height: 4px; border-radius: 2px; background: var(--surface-selected); margin-top: var(--s1); overflow: hidden; }
@@ -108,7 +114,7 @@ body {
 /* эйбрау: микролейбл капсом — один рецепт продукта r6tv (components.css «ЭЙБРАУ») */
 .watch-eyebrow {
   font-size: var(--fs-min); font-weight: 700; letter-spacing: var(--eyebrow-ls);
-  text-transform: uppercase; color: var(--dim); line-height: 1.4;
+  text-transform: uppercase; color: var(--muted); line-height: 1.4;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
@@ -161,14 +167,13 @@ body {
   .watch-link:active, .btn-clear-text:active { transform: none; }
 }
 
-/* ярлык озвучки: пилюля-контрол r6tv, микролейбл капсом; SUB — светлее (это данные, не украшение) */
-.watch-meta { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+/* ярлык озвучки: пилюля-контрол r6tv, микролейбл капсом */
 .tr-chip {
   flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 1px var(--s2); border-radius: 999px; background: var(--surface-selected);
-  font-size: var(--fs-min); font-weight: 700; letter-spacing: var(--eyebrow-ls); color: var(--muted);
+  font-size: var(--fs-min); font-weight: 700; letter-spacing: var(--eyebrow-ls); color: var(--text);
 }
-.tr-chip--sub { color: var(--text); }
+/* SUB и DUB различаются словом; серый DUB на --surface-selected давал 4.48:1 — ниже AA */
 
 /* постер в ячейке (r6tv: «фото в ячейке»), номер серии — пилюлей поверх */
 .ep-thumb {
@@ -217,3 +222,7 @@ body {
 .btn-site--primary { background: var(--text); color: var(--surface-page); }
 .btn-site--primary:hover { background: #ffffff; color: var(--surface-page); }
 .btn-site:focus-visible { outline: 2px solid var(--accent-edge); outline-offset: 2px; }
+
+/* пока виден тост — отступ снизу, чтобы он не закрывал ‹ › последней карточки */
+body.has-toast .watch-list { padding-bottom: 48px; }
+.btn-retry { width: auto; padding: 0 var(--s4); margin-top: var(--s2); }
